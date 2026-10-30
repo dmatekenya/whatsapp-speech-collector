@@ -3,19 +3,15 @@ requires = ["hatchling>=1.21.0", "hatch-vcs>=0.3.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "template"
-description = "A template Python package from the World Bank Data Lab"
+name = "whatsapp-speech-collector"
+description = "Collect Chichewa speech data through WhatsApp voice notes via Twilio"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
-keywords = ["template", "reproducibility"]
+keywords = ["speech", "chichewa", "whatsapp", "twilio"]
 authors = [{ name = "Development Data Group", email = "datalab@worldbank.org" }]
 classifiers = [
 	"Programming Language :: Python :: 3",
-	"Programming Language :: Python :: 3.7",
-	"Programming Language :: Python :: 3.8",
-	"Programming Language :: Python :: 3.9",
-	"Programming Language :: Python :: 3.10",
-	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.13",
 	"Programming Language :: Python :: 3 :: Only",
 	"License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
 	"Operating System :: OS Independent",
@@ -24,23 +20,29 @@ classifiers = [
 ]
 dynamic = ["version"]
 
-requires-python = ">=3.7"
+requires-python = ">=3.13"
 dependencies = [
-	"bokeh>=3,<4",
-	"requests>=2.28.1",
-	"pandas>=2",
-	"pycountry>=22.3.5",
+    "alembic>=1.20.0",
+    "asyncpg>=0.32.0",
+    "fastapi>=0.143.2",
+    "httpx>=0.28.1",
+    "phonenumbers>=9.0.41",
+    "pillow>=13.0.0",
+    "psycopg[binary]>=3.3.6",
+    "pydantic-settings>=2.16.0",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
+    "redis>=8.1.0",
+    "rq>=2.12.0",
+    "sqlalchemy[asyncio]>=2.1.4",
+    "twilio>=9.12.0",
+    "uvicorn[standard]>=0.54.0",
 ]
 [project.optional-dependencies]
 docs = [
 	"docutils==0.17.1", # pinned to docutils==0.17.1 due to https://github.com/worldbank/template/issues/60. See also: https://jupyterbook.org/en/stable/content/citations.html?highlight=docutils#citations-and-bibliographies
 	"jupyter-book>=1,<2",
 ]
-
-[project.urls]
-"Homepage" = "https://github.com/worldbank/template"
-"Bug Reports" = "https://github.com/worldbank/template/issues"
-"Source" = "https://github.com/worldbank/template"
 
 [tool.codespell]
 skip = 'docs/_build,docs/bibliography.bib,*.png,*.gz,*.whl'
@@ -52,8 +54,21 @@ include = [
     "src/**/*"
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
 [tool.hatch.version]
 source = "vcs"
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "fakeredis>=2.40.0",
+    "pytest>=9.1.1",
+]

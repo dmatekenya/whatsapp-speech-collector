@@ -1,0 +1,147 @@
+# ==============
+# DOCKER COMPOSE
+# ==============
+# Production stack for the droplet. Only Caddy is reachable from outside
+# (ports 80/443); everything else talks over the internal network.
+#
+#   docker compose up -d --build      # or: scripts/deploy.sh
+#   docker compose ps
+#   docker compose logs -f api worker
+#
+# Settings come from .env next to this file (see .env.production.example).
+# Inside the containers the database and Redis are reached by service name;
+# the values below override whatever .env says for them.
+# Local testing on a Mac (no Caddy, API on localhost:8000):
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+
+name: whatsapp-speech-collector
+
+# The image is built once, by the migrate service; api and worker run the
+# same image (never pulled from a registry).
+x-build: &build
+  context: .
+  args:
+    APP_UID: ${APP_UID:-1000}
+    INSTALL_DEV: ${INSTALL_DEV:-false}
+
+x-app: &app
+  image: whatsapp-speech-collector:latest
+  pull_policy: never
+  env_file: .env
+  environment:
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    REDIS_URL: redis://redis:6379/0
+    # Container paths (data/ is bind-mounted from the host).
+    AUDIO_ROOT: /app/data/audio
+    PROMPT_MEDIA_ROOT: /app/data/prompts/images/_prepared
+  volumes:
+    - ./data:/app/data
+  restart: unless-stopped
+
+services:
+  # =======
+  # MIGRATE
+  # =======
+  # One-shot: brings the database schema up to date, then exits. api and
+  # worker start only after it succeeds. Not restarted (a finished one-shot
+  # with "unless-stopped" would run again forever).
+  migrate:
+    <<: *app
+    build: *build
+    pull_policy: build
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ===
+  # API
+  # ===
+  api:
+    <<: *app
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ======
+  # WORKER
+  # ======
+  # Processes inbound messages (storage, conversation engine) and sends replies.
+  worker:
+    <<: *app
+    command: ["rq", "worker", "inbound", "outbound", "--with-scheduler", "--url", "redis://redis:6379/0"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # ========
+  # POSTGRES
+  # ========
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # =====
+  # REDIS
+  # =====
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # =====
+  # CADDY
+  # =====
+  # HTTPS for DOMAIN (certificates from Let's Encrypt, renewed automatically),
+  # proxying to the API.
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

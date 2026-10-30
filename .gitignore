@@ -93,3 +93,17 @@ _build/
 
 # setuptools-scm/
 src/*/_version.py
+
+# uv virtual environment
+.venv/
+
+# Data 
+data/
+
+# Environment files with real values (the examples are committed)
+.env.*
+!.env.example
+!.env.production.example
+
+# Database backups (contain personal data)
+backups/

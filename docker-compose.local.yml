@@ -1,0 +1,25 @@
+# ======================
+# LOCAL TESTING OVERRIDE
+# ======================
+# For testing the containers on a Mac (Colima): no Caddy, the API published on
+# localhost so ngrok can still point at it, test tools in the image, and a
+# test database for running pytest inside the container.
+#
+#   INSTALL_DEV=true docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# LOCAL_API_PORT (default 8000) avoids clashing with a dev server already on 8000.
+
+services:
+  api:
+    ports:
+      - "127.0.0.1:${LOCAL_API_PORT:-8000}:8000"
+
+  postgres:
+    volumes:
+      # Creates speech_collector_test (for pytest) the first time the volume
+      # is initialised.
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+
+  caddy:
+    # Not started locally: only runs when the "production" profile is enabled.
+    profiles: ["production"]

@@ -1,0 +1,231 @@
+# Database schema
+
+Last updated: 2026-10-18
+
+Postgres is the system of record. Files (audio, prompt images) live on disk (`data/`) locally and
+in DigitalOcean Spaces on the droplet; the database stores paths to them, relative to a
+configurable root. Schema changes are made only through Alembic migrations (`migrations/versions/`).
+
+> This document describes the intended schema. Check it against the real one with `\d <table>`
+> in psql, and update this file whenever a migration changes a table.
+
+## Overview
+
+| Table | Purpose | Key | Contains personal data |
+|---|---|---|---|
+| `inbound_messages` | Every message received from WhatsApp, raw | `message_sid` | **Yes** (phone numbers in `sender`, `raw_payload`) |
+| `recordings` | One row per stored voice note | `id` (file names `R000123`) | No (participant ID only) |
+| `participants` | The registry of approved contributors | `participant_id` (`P0001`) | **Yes** (name, phone number) |
+| `prompts` | Sentences, conversation starters and images | `prompt_id` (`S00001`, `C0001`, `I0001`) | No |
+| `sessions` | One sitting of recording by one participant | `id` | No |
+| `assignments` | Every prompt sent to a participant | `id` | No |
+| `conversation_state` | Where each participant is in the conversation with the bot | `participant_id` | No |
+| `outbound_messages` | Every message the bot sends, and its delivery status | `id` | **Yes** (bodies can contain first names) |
+| `alembic_version` | Which migrations have been applied (managed by Alembic) | | No |
+
+## How they connect
+
+```mermaid
+erDiagram
+  PARTICIPANTS ||--o{ INBOUND_MESSAGES : sends
+  INBOUND_MESSAGES ||--o| RECORDINGS : "voice note becomes"
+  PARTICIPANTS ||--o{ RECORDINGS : owns
+  PARTICIPANTS ||--o{ SESSIONS : has
+  SESSIONS ||--o{ ASSIGNMENTS : contains
+  PROMPTS ||--o{ ASSIGNMENTS : "is sent as"
+  PARTICIPANTS ||--o{ ASSIGNMENTS : receives
+  ASSIGNMENTS |o--o| RECORDINGS : "answered by"
+  RECORDINGS |o--o| RECORDINGS : "duplicate of"
+  PARTICIPANTS ||--o| CONVERSATION_STATE : "is in"
+  INBOUND_MESSAGES ||--o{ OUTBOUND_MESSAGES : "answered by"
+  ASSIGNMENTS ||--o{ OUTBOUND_MESSAGES : "sent as"
+```
+
+A voice note's journey: `inbound_messages` (raw) → `recordings` (stored audio) → linked to an
+`assignments` row (which prompt it answered) → which points to `prompts` (what was asked) and
+`participants` (who answered). A recording without an assignment is free speech.
+
+## Tables
+
+### inbound_messages
+
+Every message Twilio delivers to the webhook, stored before any processing. Restricted: contains
+phone numbers.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, PK | |
+| `message_sid` | text, unique | Twilio message ID (`SM…` text, `MM…` media). Deduplicates Twilio retries |
+| `channel` | text | `twilio` (Meta Cloud API later) |
+| `sender` | text | E.164 phone number |
+| `message_type` | text | `text`, `audio`, `other` |
+| `raw_payload` | JSONB | Full Twilio form payload, for replay and debugging |
+| `participant_id` | text, nullable | Set by the worker after the registry lookup |
+| `status` | text | `received` → `queued` → `processed`, or `failed`, `unregistered` |
+| `attempts` | int | Processing attempts |
+| `error` | text, nullable | Last error |
+| `received_at` | timestamptz | |
+| `processed_at` | timestamptz, nullable | |
+| `media_deleted_at` | timestamptz, nullable | When the media was deleted from Twilio (after storage, or without download for unregistered senders); it can't be downloaded after this |
+
+### recordings
+
+One row per voice note stored. Files: `<audio_root>/<participant_id>/<participant_id>_R<id>.ogg`
+(original) and `.wav` (16 kHz mono, used for QC and ASR). Files never move once stored; accepted
+and rejected views are produced by export.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, PK | Used in file names (`R000123`) |
+| `inbound_message_id` | FK → inbound_messages, unique | One recording per message |
+| `participant_id` | text, nullable | Null only for recordings made before the registry existed |
+| `assignment_id` | FK → assignments, nullable | Null = free speech (no prompt). Failed attempts at a prompt are linked too (and rejected) |
+| `folder` | text | Participant folder (or `_unassigned`) |
+| `original_path` | text | Relative to `audio_root` |
+| `wav_path` | text | Relative to `audio_root` |
+| `original_content_type` | text | Usually `audio/ogg` |
+| `duration_s` | float | |
+| `sample_rate`, `channels` | int | Of the WAV: 16000, 1 |
+| `size_bytes` | bigint | |
+| `content_sha256` | text, indexed | Hash of the original audio; identical files = forwarded or re-sent |
+| `duplicate_of_recording_id` | FK → recordings, nullable | Points to the earliest-received recording with the same hash |
+| `twilio_media_deleted` | bool | Media removed from Twilio after safe storage |
+| `status` | text | Storage status: `pending`, `stored`, `failed` |
+| `error` | text, nullable | |
+| `qc_status` | text, indexed | Whether the clip is usable: `pending`, `accepted`, `rejected`, `needs_review`. Rejected clips never count toward minutes |
+| `qc_reason` | text, nullable | Set by the conversation engine for failed attempts: `too_short`, `too_long`, `empty`; the QC step will add e.g. `no_speech`, `duplicate`, `wrong_sentence` |
+| `created_at`, `updated_at` | timestamptz | |
+
+### participants
+
+The registry, loaded from batch CSV files with `scripts/import_participants.py` and the rules in
+`config/participants.yaml`. Restricted: contains names and phone numbers.
+
+| Column | Type | Notes |
+|---|---|---|
+| `participant_id` | text, PK | `P0001`… from a sequence; never reused |
+| `name` | text | |
+| `phone_number` | text, unique | Normalized E.164 |
+| `status` | text | `active`, `paused`, `completed`, `withdrawn` (`inactive` kept for older rows, treated like `paused`). STOP + confirm sets `withdrawn` |
+| `is_test` | bool | Test participants are excluded from dataset exports |
+| `batch` | text | Source file name |
+| `enrolled_on` | date | |
+| `attributes` | JSONB | Configurable fields: `age`, `sex`, `district`, `first_language`, `accent`, optional `targets_minutes` override |
+| `created_at`, `updated_at` | timestamptz | |
+
+### prompts
+
+Everything a participant can be asked to respond to, loaded with `scripts/import_prompts.py`
+(rules in `config/prompts.yaml`).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, PK | |
+| `prompt_id` | text, unique | `S00001` sentence, `C0001` conversation starter, `I0001` image; one sequence per type |
+| `prompt_type` | text | `sentence`, `conversation_starter`, `image` |
+| `text` | text, nullable | The sentence or question; empty for images |
+| `normalized_text` | text | For duplicate detection (unique per type) |
+| `source` | text | Where it came from, e.g. a DHS questionnaire, `synthetic-english-test`, `ai-generated` |
+| `domain` | text, nullable | Topic; for images, the subfolder name |
+| `media_path` | text, nullable | Images: prepared JPEG, relative to `prompt_media_root` (`<domain>/I0001.jpg`) |
+| `media_content_type` | text, nullable | `image/jpeg` |
+| `media_size_bytes`, `media_width`, `media_height` | bigint/int, nullable | Of the prepared copy |
+| `content_sha256` | text, nullable | Images: hash of the original as supplied (unique per type; duplicates detected on it) |
+| `attributes` | JSONB | Optional columns (license, notes); images: `batch`, `original_name` |
+| `flags` | JSONB | e.g. `{"length": "short"}`, `{"joined_lines": true}`, `{"all_caps": true}` |
+| `source_file` | text | Batch file or folder it was imported from |
+| `active` | bool | Inactive prompts are never assigned but keep their history |
+| `created_at` | timestamptz | |
+
+### sessions
+
+One sitting: a participant recording one task type, up to `session_size` prompts, ending early
+when that type's target is met.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, PK | |
+| `participant_id` | FK → participants | At most one active session per participant |
+| `task_type` | text | `sentence`, `image`, `conversation_starter` |
+| `status` | text | `active`, `completed`, `paused`, `abandoned` |
+| `size` | int | Planned number of prompts |
+| `started_at`, `ended_at` | timestamptz | |
+
+### assignments
+
+Every time a prompt is sent to someone. Drives coverage (how many speakers each prompt has) and
+links each recording to what was asked.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, PK | |
+| `participant_id` | FK → participants | Unique with `prompt_id`: nobody gets the same prompt twice |
+| `prompt_id` | FK → prompts | |
+| `prompt_type` | text | |
+| `session_id` | FK → sessions | Unique with `position` |
+| `position` | int | 1…session size ("Sentence 4 of 10") |
+| `prompt_text_snapshot` | text, nullable | Exactly what was sent; the reference text for the faithfulness check |
+| `status` | text | `sent` → `recorded` → `accepted` / `rejected`, or `expired`, `skipped` |
+| `outbound_message_sid` | text, indexed | Twilio ID of the message carrying the prompt; matches swipe-replies |
+| `retake_count` | int | |
+| `sent_at`, `expires_at`, `answered_at` | timestamptz | Unanswered assignments expire after `assignment_expiry_hours` |
+| `recording_id` | FK → recordings, nullable | The newest recording that answered it and wasn't rejected (failed attempts link to the assignment but don't replace this) |
+| `message_variant` | int, nullable | Which caption/wrapper variant was used when the prompt was sent (index into the catalog list, e.g. `prompt.image_caption`) |
+
+Coverage of a prompt = its accepted + recorded + unexpired sent assignments; it stops being
+assigned at `speakers_per_prompt` (see `config/assignment_settings.yaml`).
+
+### conversation_state
+
+Where each participant is in the conversation. One row per participant, created on their first
+message. Read and written by the conversation engine (`src/conversation/engine.py`) under a
+per-sender advisory lock, in the same transaction as the reply's `outbound_messages` rows.
+
+| Column | Type | Notes |
+|---|---|---|
+| `participant_id` | FK → participants, PK | |
+| `state` | text | `idle`, `awaiting_ready`, `in_session`, `awaiting_continue`, `awaiting_stop_confirm` |
+| `context` | JSONB | e.g. `offered_task_type`, `previous_state` (to return to after a cancelled STOP), `welcomed`, `instructions_seen` (`general`, `sentence`, `image`, `conversation_starter`), `session_id` |
+| `updated_at` | timestamptz | |
+
+### outbound_messages
+
+Every message the bot sends. Written together with the state change it belongs to, then sent by
+the `send_outbound` job (RQ queue `outbound`). Restricted: bodies can contain first names. The
+recipient's number isn't stored here; it comes from the inbound message being answered.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, PK | |
+| `participant_id` | FK → participants, nullable | Null for replies to unregistered numbers |
+| `inbound_message_id` | FK → inbound_messages | The message being answered. Unique with `purpose`: a retried job never sends the same reply twice |
+| `purpose` | text | `reply`; `reply_media` when an image prompt's caption is too long and the text goes first |
+| `sequence` | int | Order within one turn; each message sent queues the next |
+| `message_keys` | JSONB | Catalog keys used, with variant indexes: `[{"key": "prompt.image_caption", "variant": 2}, …]` |
+| `body` | text | Exactly what was sent (or the image caption) |
+| `media_prompt_id` | FK → prompts, nullable | Image prompts: sent as media via a signed `/media/prompts/{token}` URL |
+| `assignment_id` | FK → assignments, nullable | The prompt this message carries; marked sent with the Twilio SID |
+| `status` | text | `pending` → `sent` → `delivered` → `read`, or `failed` (from Twilio status callbacks, `POST /whatsapp/status`) |
+| `twilio_sid` | text, unique | |
+| `error`, `error_code` | text, int, nullable | Twilio's error, e.g. 63019 when it couldn't fetch an image |
+| `created_at`, `sent_at`, `status_updated_at` | timestamptz | |
+
+## Planned tables
+
+| Table | Purpose | Comes with |
+|---|---|---|
+| `qc_results` | One row per check run on a recording (stage `fast`, `asr` or `human`): measurements (duration, loudness, clipping, silence, SNR, CER, transcript), decision, thresholds version | Fast QC and the ASR batch |
+
+## Files on disk
+
+| Path | Contents |
+|---|---|
+| `data/participants/` | Participant batch CSVs (real names and numbers; never in git) |
+| `data/prompts/text/`, `data/prompts/conversation-starters/` | Prompt batch CSVs, `*_imported.csv` copies with IDs, `*_rejected.csv` |
+| `data/prompts/images/<batch>/<domain>/` | Original images |
+| `data/prompts/images/_prepared/<domain>/I0001.jpg` | WhatsApp-ready copies: JPEG, metadata stripped, resized |
+| `data/audio/<participant_id>/` | Original `.ogg` and 16 kHz `.wav` per recording |
+| `config/` | Import rules and assignment settings (YAML) |
+| `messages/bot_messages_en.yaml` | Bot message texts (Chichewa version later) |
+
+All of `data/` is gitignored.

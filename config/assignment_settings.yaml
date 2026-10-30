@@ -1,0 +1,30 @@
+# ===================
+# ASSIGNMENT SETTINGS
+# ===================
+# config/assignment_settings.yaml: how prompts are assigned and how much each participant records.
+# Read by the task bank (src/tasks/config.py: prompt selection, coverage) and the conversation
+# engine (sessions, progress).
+#
+# - speakers_per_prompt: how many different participants should record each prompt, per type.
+#   A prompt stops being assigned once it has this many accepted recordings (pending ones count too).
+# - session_size: prompts per session before the bot pauses and asks the participant to continue.
+# - assignment_expiry_hours: unanswered prompts go back to the pool after this long.
+# - max_retakes_per_prompt: re-recordings allowed for one prompt before moving on.
+# - targets_minutes: default recording targets per participant, in total and per task type.
+#   Individual participants can override these in the registry.
+# - clip_seconds: accepted recording length; shorter or longer clips get a retake request.
+#
+# Values are starting points for the pilot. Adjust from pilot data rather than editing code.
+speakers_per_prompt:
+  sentence: 5
+  image: 5
+  conversation_starter: 3
+session_size: 10              # prompts per session before the bot pauses
+assignment_expiry_hours: 24   # unanswered prompts return to the pool
+max_retakes_per_prompt: 2
+targets_minutes:              # per participant
+  total: 10                   # your test plan: 10 minutes each
+  sentence: 4
+  image: 2
+  conversation_starter: 3
+clip_seconds: {min: 5, max: 30}

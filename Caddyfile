@@ -1,0 +1,9 @@
+# =====
+# CADDY
+# =====
+# HTTPS for the domain in DOMAIN (set in .env); certificates are obtained and
+# renewed automatically. Everything is passed to the API container.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy api:8000
+}

@@ -1,0 +1,92 @@
+# Prompt bank import:
+#   uv run python -m scripts.import_prompts <prompt type> <csv> [--dry-run]
+#
+# One section per prompt type under prompt_types. Each has its own ID
+# sequence, text rules, and columns:
+#   fields:      real columns on the prompts table.
+#   attributes:  optional columns stored in prompts.attributes (JSONB).
+#   report_counts: true   the report shows a count per value, to spot typos.
+#
+# Text rules shared by all types: normalization and duplicate detection,
+# line breaks joined into one line (with ". " when the line doesn't already end
+# in . ? or !, flagged joined_lines), and words of 3+ letters written entirely
+# in capitals flagged all_caps, except all_caps_exceptions (compared
+# case-sensitively, as written).
+
+prompt_types:
+  sentences:
+    prompt_type: sentence
+    id_prefix: S
+    id_width: 5
+    sequence: prompt_sentence_id_seq
+    # Sentence length in words. Inside target_words: imported as is. Outside
+    # it but inside hard_limit_words: imported with flags.length = short or
+    # long, and listed as a warning. Outside hard_limit_words: rejected.
+    target_words: [8, 25]
+    hard_limit_words: [3, 50]
+    allow_digits: false
+    # Besides letters and spaces, only these characters are allowed.
+    check_characters: true
+    allowed_punctuation: '.,?!;:-"'
+    # Apostrophe variants: allowed, and unified to ' in normalized_text.
+    apostrophes: "'’‘ʼ"
+    # Curly double quotes are allowed as variants of ".
+    quotes: "“”"
+    all_caps_exceptions: [HIV, AIDS, BCG, DMPA]
+    fields:
+      text: {type: sentence, required: true}
+      source: {type: text, required: true}
+      domain: {type: domain, required: false, report_counts: true}
+      # Present in *_imported.csv copies; rows are matched by normalized text.
+      prompt_id: {type: text}
+    attributes:
+      license: {type: text}
+      notes: {type: text}
+
+  conversation_starters:
+    prompt_type: conversation_starter
+    id_prefix: C
+    id_width: 4
+    sequence: prompt_conversation_starter_id_seq
+    # Not read aloud, so no target range (no length flags): only hard limits.
+    hard_limit_words: [3, 40]
+    # Free speech prompts: digits and any characters are fine.
+    allow_digits: true
+    check_characters: false
+    apostrophes: "'’‘ʼ"
+    all_caps_exceptions: [HIV, AIDS, BCG, DMPA]
+    fields:
+      text: {type: sentence, required: true}
+      source: {type: text, required: true}
+      domain: {type: domain, report_counts: true}
+      prompt_id: {type: text}
+    attributes:
+      notes: {type: text}
+
+  images:
+    prompt_type: image
+    # Read from a folder instead of a CSV: every image file under the batch
+    # folder (recursively) is one prompt; files and folders starting with "_"
+    # or "." are skipped. batch = the folder's name; domain = the first
+    # subfolder below it (images directly in the batch folder get none).
+    # source comes from --source. Duplicates: identical file bytes (SHA-256).
+    kind: image_folder
+    id_prefix: I
+    id_width: 4
+    sequence: prompt_image_id_seq
+    extensions: [jpg, jpeg, png, webp]
+    # Originals larger than this are rejected before decoding.
+    max_source_mb: 50
+    # Prepared copies (what participants receive), named I0001.jpg: EXIF
+    # orientation applied; all metadata stripped (EXIF/GPS, XMP, C2PA, ICC,
+    # PNG text chunks); RGB JPEG; long side at most max_long_side px; under
+    # max_mb (WhatsApp's image limit is 5 MB). An image that can't be
+    # processed is rejected, never copied as is.
+    prepared:
+      jpeg_quality: 85
+      max_long_side: 1600
+      max_mb: 5
+    fields:
+      file: {type: image_file, required: true}
+      domain: {type: domain, report_counts: true}
+      source: {type: text}

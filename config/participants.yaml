@@ -1,0 +1,45 @@
+# Participant registry import (scripts/import_participants.py).
+#
+# fields:      real columns on the participants table.
+# attributes:  stored in participants.attributes (JSONB), validated here.
+# Field types: text (whitespace-normalized), int (min/max), bool, date
+# (YYYY-MM-DD), choice (choices, case_insensitive), phone.
+# pii: true    the value is never shown in import reports.
+# report_counts: true   the report shows a count per value, to spot typos.
+
+id:
+  column: participant_id
+  prefix: P
+  width: 4
+  sequence: participant_id_seq
+
+phone:
+  default_region: MW
+  # Without a leading +, numbers are read as Malawian. "1" lets US test
+  # numbers through; they must be written with +1.
+  allowed_country_codes: ["265", "1"]
+
+fields:
+  # Blank for new participants; filled from the sequence. Rows are matched
+  # by participant_id if present, otherwise by phone number.
+  participant_id: {type: text}
+  name: {type: text, required: true, pii: true}
+  phone_number: {type: phone, required: true, pii: true}
+  # Defaults apply to new participants only; blanks never overwrite existing
+  # values on re-import.
+  status:
+    type: choice
+    choices: [active, paused, completed, withdrawn, inactive]
+    case_insensitive: true
+    default: active
+    report_counts: true
+  is_test: {type: bool, default: false, report_counts: true}
+  batch: {type: text}        # default: file name without extension
+  enrolled_on: {type: date}  # default: import date
+
+attributes:
+  age: {type: int, min: 18, max: 100}
+  sex: {type: choice, choices: [M, F], case_insensitive: true, report_counts: true}
+  district: {type: text, report_counts: true}
+  first_language: {type: text, report_counts: true}
+  accent: {type: text, report_counts: true}

@@ -1,0 +1,198 @@
+# ===============================
+# BOT MESSAGES (ENGLISH, TESTING)
+# ===============================
+# messages/bot_messages_en.yaml: every message the WhatsApp bot sends, in English (for testing).
+# Loaded by src/conversation/messages.py (BOT_LANGUAGE=en); keys are checked at startup.
+# Placeholders in {braces} are filled in by the bot at send time; a missing value is an error.
+# A value may be a list of variants: one is picked at random and recorded with the message.
+# WhatsApp formatting: *bold*, _italic_. Keep messages short - people read them on a phone.
+# Always quote single-line values: a YAML value starting with * is read as an alias.
+# The Chichewa version (bot_messages_ny.yaml) will have exactly the same keys.
+
+meta:
+  language: en
+  version: 1
+
+# ========
+# KEYWORDS
+# ========
+# Matched case-insensitively against the whole message, after trimming spaces and punctuation.
+# What a reply means also depends on context (e.g. "1" means "yes" only when asked if ready).
+keywords:
+  greetings: ["hi", "hie", "hello", "hey", "moni", "muli bwanji", "mwadzuka bwanji", "mwaswera bwanji"]
+  # Quote "yes": unquoted, YAML reads the key as true.
+  "yes": ["1", "yes", "y", "ok", "okay", "ready", "inde", "eya", "ndakonzeka"]
+  later: ["2", "no", "later", "not now", "ayi", "pambuyo pake"]
+  instructions: ["instructions", "tips", "malangizo"]
+  progress: ["progress", "status"]
+  help: ["help", "thandizo"]
+  stop: ["stop", "siyani"]
+
+# ==========
+# TASK NAMES
+# ==========
+task_names:
+  sentence: "reading sentences"
+  image: "describing pictures"
+  conversation_starter: "talking freely"
+
+# =======
+# WELCOME
+# =======
+welcome:
+  first_time: "Hi {first_name}, welcome to the Chichewa voice project! Thank you for taking part."
+  returning: "Hi {first_name}, welcome back!"
+
+# ========
+# PROGRESS
+# ========
+progress:
+  none_yet: "You haven't recorded anything yet, so let's get started."
+  summary: |
+    So far you have recorded *{total_done}* of {total_target} minutes:
+    • Reading sentences: {sentence_done} of {sentence_target} min
+    • Describing pictures: {image_done} of {image_target} min
+    • Talking freely: {conversation_starter_done} of {conversation_starter_target} min
+  target_reached: |
+    You've reached your target of {total_target} minutes. Thank you so much for your contribution! 🙏
+    We'll contact you if there is more to record.
+
+# ============
+# TODAY'S TASK
+# ============
+today:
+  sentence: "Today's task is *reading sentences*. I'll send you a sentence, and you read it aloud in a voice note."
+  image: "Today's task is *describing pictures*. I'll send you a picture, and you describe what you see in a voice note."
+  conversation_starter: "Today's task is *talking freely*. I'll send you a question, and you answer it in your own words in a voice note."
+
+# ============
+# INSTRUCTIONS
+# ============
+# "general" is shown before a participant's first session; the task-specific part before their
+# first session of each task type. Both are shown again whenever they reply INSTRUCTIONS.
+instructions:
+  general: |
+    A few tips for good recordings:
+    1. Find a quiet place, away from TV, radio and crowds.
+    2. Hold the phone about a hand's length from your mouth.
+    3. Press and hold the microphone button, wait one second, then start speaking.
+    4. Speak clearly, at your normal pace.
+    5. Wait one second after you finish before letting go.
+    6. Always record a new voice note. Never forward one.
+  sentence: |
+    For each sentence:
+    • Read the whole sentence exactly as written.
+    • Don't add any words before or after it.
+    • If you make a mistake, simply record it again.
+  image: |
+    For each picture:
+    • Describe what you see: the people, places and objects, and what is happening.
+    • Speak in Chichewa, in your own words.
+    • Talk for about {min_seconds} to {max_seconds} seconds.
+  conversation_starter: |
+    For each question:
+    • Answer in your own words, as if talking to a friend.
+    • Speak in Chichewa.
+    • Talk for about {min_seconds} to {max_seconds} seconds.
+    • Don't mention private details such as full names, addresses or phone numbers.
+  reminder: "Reply *INSTRUCTIONS* at any time to see these tips again."
+
+# ===========
+# READY CHECK
+# ===========
+ready:
+  ask: "Are you ready to start? Reply *1* to start or *2* for later."
+  later: "No problem. Send *Hi* whenever you're ready."
+  unclear: "Please reply *1* to start or *2* for later."
+
+# =======
+# PROMPTS
+# =======
+# The acknowledgement is prepended to the next prompt, so each turn is one message.
+prompt:
+  ack_prefix: "✅ Received. "
+  sentence: |
+    Sentence {n} of {session_size}:
+
+    _{text}_
+
+    Read it aloud and send a voice note.
+  # Variants: one is picked at random per picture, and its index is recorded.
+  image_caption:
+    - "Picture {n} of {session_size}. Describe what you see in a voice note."
+    - "Picture {n} of {session_size}. Tell us what is happening in this picture."
+    - "Picture {n} of {session_size}. What can you see here? Describe it in a voice note."
+    - "Picture {n} of {session_size}. Describe this picture as if telling a friend about it."
+  conversation_starter: |
+    Question {n} of {session_size}:
+
+    _{text}_
+
+    Answer in a voice note.
+  retake_ack: "✅ Got it. Here it is again:"
+
+# =======
+# SESSION
+# =======
+session:
+  complete: |
+    ✅ That's {session_size} recordings. Thank you, {first_name}!
+    You have now recorded {total_done} of {total_target} minutes.
+    Send *Hi* when you're ready for more.
+  resume: "Let's continue where you left off."
+  type_target_reached: |
+    ✅ You've finished *{task_name}*. Thank you, {first_name}!
+    You have now recorded {total_done} of {total_target} minutes.
+    Next up: *{next_task_name}*. Reply *1* to start now or *2* for later.
+  type_target_reached_no_next: |
+    ✅ You've finished *{task_name}*. Thank you, {first_name}!
+    That's everything for now. We'll contact you if there's more to record.
+  continue_ask: |
+    ✅ That's {session_size} recordings. Thank you, {first_name}!
+    You have now recorded {total_done} of {total_target} minutes.
+    Next up: *{next_task_name}*. Reply *1* to continue now or *2* for later.
+  paused: "No problem, we'll stop here for now. Send *Hi* whenever you want to continue."
+  open_prompt_reminder: "Hello again! You still have this one to record:"
+
+# =========================
+# PROBLEMS WITH A RECORDING
+# =========================
+# Payload checks (not audio) need no download; the rest come from the fast checks in the worker.
+problems:
+  text_instead_of_audio: "Please reply with a *voice note*: press and hold the microphone button to record."
+  image_instead_of_audio: "I received a picture, but I need a *voice note*. Press and hold the microphone button to record."
+  video_instead_of_audio: "I received a video, but I need a *voice note*. Press and hold the microphone button to record."
+  document_instead_of_audio: "I received a file, but I need a *voice note*. Press and hold the microphone button to record."
+  other_instead_of_audio: "I can only use *voice notes*. Press and hold the microphone button to record."
+  uploaded_audio_file: "That looks like an audio file rather than a voice note. Please record directly in WhatsApp."
+  empty_audio: "That voice note seems to be empty. Please record it again."
+  too_short: "That recording was very short ({duration} seconds). Please record it again, aiming for at least {min_seconds} seconds."
+  too_long: "That recording was {duration} seconds, longer than the {max_seconds}-second limit. Please record it again, a little shorter."
+  no_speech: "I couldn't hear any speech in that recording. Please find a quiet place and try again."
+  too_quiet: "That recording was very quiet. Please hold the phone a little closer and try again."
+  too_loud: "That recording was distorted. Please hold the phone a little further away and try again."
+  duplicate: "It looks like you've sent this recording before. Please record a new voice note."
+  retake_limit: "Let's move on to the next one."
+  processing_error: "Sorry, something went wrong with that recording. Please send it again."
+
+# ================
+# OTHER SITUATIONS
+# ================
+participant:
+  paused: "Your participation is paused at the moment. The project team will contact you when it starts again."
+  completed: "You've already completed your recordings. Thank you! The project team will contact you if there's more to do."
+unregistered: "Hello! This number isn't registered for the Chichewa voice project. If you think this is a mistake, please contact the project team."
+help: |
+  How this works:
+  • *Hi*: start or continue recording
+  • *INSTRUCTIONS*: tips for good recordings
+  • *PROGRESS*: see how much you've recorded
+  • *STOP*: stop taking part
+  For other questions, contact the project team: {support_contact}
+stop:
+  confirm: "Are you sure you want to stop taking part? Reply *1* to confirm or *2* to continue."
+  done: "You've stopped taking part. Thank you for your contribution. If you change your mind, please contact the project team."
+  cancelled: "Great, let's carry on."
+no_prompts_left: "There are no more {task_name} tasks for you right now. Thank you! We'll let you know when there are more."
+not_understood: "Sorry, I didn't understand. Send *Hi* to start recording, or *HELP* to see what you can do."
+error_generic: "Sorry, something went wrong on our side. Please try again in a few minutes."

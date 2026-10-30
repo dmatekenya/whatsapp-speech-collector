@@ -1,0 +1,20 @@
+# Never in the image: secrets, data (bind-mounted at run time), local state.
+.env
+.env.*
+data/
+backups/
+.git/
+.github/
+.venv/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+*.log
+
+# Not needed to run the app.
+notebooks/
+docs/
+_static/
+CITATION.cff

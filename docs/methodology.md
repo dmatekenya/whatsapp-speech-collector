@@ -13,8 +13,13 @@ live in the separate prompt creation guide.
 
 - Goal: an open Chichewa speech dataset of about 500 hours for ASR (and a TTS-ready subset from the
   HQ group), recorded between Months 3 and 8 of the work plan (Sep 2026 – Aug 2027).
-- About 200 hours are prompted read speech; the rest is picture descriptions, prompted free
-  speech and unprompted spontaneous speech.
+- **Speech mix:** about 30% scripted (read) speech and 70% spontaneous speech, following
+  Masakhane guidance: roughly 150 hours read and 350 hours spontaneous. Current decision: picture
+  descriptions, answers to conversation starters and unprompted free speech all count as
+  spontaneous (unscripted, elicited speech); to be confirmed with Masakhane. Spontaneous speech
+  needs transcription, while read speech mostly reuses the prompt text, so the transcription
+  workload follows the spontaneous share. (The work plan's earlier figure of ~200 hours of read
+  speech needs updating to match.)
 - Two recording groups: HQ (20 speakers, USB/condenser microphones, recorded separately) and SR
   (smartphone cohorts, by district: 9 cohorts SR-C01–SR-C09, three districts each). This document
   covers the SR channel.
@@ -48,7 +53,9 @@ live in the separate prompt creation guide.
   WhatsApp's free 24-hour service window; no paid template messages are used.
 - **Provider.** Piloted with Twilio; moving to the Meta WhatsApp Cloud API direct (lower cost,
   voice-note and forwarded flags, no media clean-up). During the move both run side by side and
-  replies always go out on the number the participant wrote to.
+  replies always go out on the number the participant wrote to. From the pilot (starting
+  2026-11-08), participants use the Meta number; the Twilio number remains only as a fallback until
+  it is retired.
 - **Comparison.** A browser-based recording app is being developed in parallel by a colleague;
   both channels will use the same prompt bank, IDs and QC so they can be compared.
 
@@ -61,12 +68,12 @@ Recordings are classified at two levels:
 - **Task type** (`task_type`): how the speech was elicited. Each task type belongs to exactly one
   speech type.
 
-| Speech type | Task type | What the participant does | Prompted | Each prompt recorded by |
-|---|---|---|---|---|
-| Scripted | Read sentences (`sentence`) | Reads a sentence aloud | Yes | 5 speakers |
-| Spontaneous | Describe pictures (`image`) | Describes an image in their own words | Yes | 7 speakers (pilot) |
-| Spontaneous | Conversation starters (`conversation_starter`) | Answers an open question freely | Yes | 3 speakers |
-| Spontaneous | Free speech (`free_speech`) | Talks about anything they like ("speak from the heart") | No | — |
+| Speech type | Task type | Shown to participants as | What the participant does | Prompted | Each prompt recorded by |
+|---|---|---|---|---|---|
+| Scripted | Read sentences (`sentence`) | Reading sentences | Reads a sentence aloud | Yes | 5 speakers |
+| Spontaneous | Describe pictures (`image`) | Describing pictures | Describes an image in their own words | Yes | 7 speakers (pilot) |
+| Spontaneous | Conversation starters (`conversation_starter`) | Answering questions | Answers an open question freely | Yes | 3 speakers |
+| Spontaneous | Free speech (`free_speech`) | Talking about anything | Talks about anything they like ("speak from the heart") | No | — |
 
 - Task types are defined in `config/assignment_settings.yaml` (`task_types`), each marked as
   prompted or not and given its speech type. The speech type is not stored per recording: it is
@@ -212,7 +219,7 @@ Recordings are classified at two levels:
 | 2026-11-05 | Participants registered offline with consent; only registered numbers take part |
 | 2026-11-05 | Maximum clip length 29 s (was 30); sentence length controlled at prompt selection so read speech needs minimal transcription; too-long sentences skipped and auto-retired; daily duration monitoring per type, sentence and participant |
 | 2026-11-05 | Images: 7 speakers per prompt for the pilot (simulation showed 24 × 5 runs out) |
-| 2026-11-05 | New unprompted task type "free speech"; split 30/25/25/20 (sentences/pictures/conversation/free speech), i.e. 70% spontaneous speech |
+| 2026-11-05 | New unprompted task type "free speech"; split 30/25/25/20 (sentences/pictures/conversation/free speech), i.e. 70% spontaneous speech, following Masakhane guidance (~150 h read, ~350 h spontaneous of 500 h); pictures, conversation starters and free speech count as spontaneous (to confirm with Masakhane) |
 | 2026-11-05 | Audio origin: forwarded audio never accepted; uploaded audio accepted but flagged for a speaker check; recorded voice notes accepted |
 | 2026-11-05 | Free speech is run like the prompted types: each invitation is an assignment without a prompt, so session size, expiry, retakes, early end and progress work the same |
 | 2026-11-05 | Voice notes outside a session are kept as "unassigned recordings" and never counted; only free-speech sessions count toward the free-speech target |
@@ -220,3 +227,4 @@ Recordings are classified at two levels:
 | 2026-11-05 | Participant-facing task names and progress labels live in the message catalogue (per language), not the configuration |
 | 2026-11-05 | Two-level classification: each task type has a speech type, scripted (sentences) or spontaneous (pictures, conversation starters, free speech); derived from the task type, not stored per recording; reports sum minutes per speech type (target 30% scripted, 70% spontaneous) |
 | 2026-11-05 | Primary recording device (type phone/tablet/computer, brand, model) collected at registration as optional participant attributes, since WhatsApp and Meta don't report the device |
+| 2026-11-05 | Pilot runs on the Meta Cloud API number (+1 618); the Twilio number stays only as a fallback until retired |

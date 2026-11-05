@@ -77,7 +77,12 @@ UNREGISTERED_REPLY_EVERY = timedelta(hours=24)
 # Shorter than this, a voice note is treated as empty.
 EMPTY_AUDIO_SECONDS = 0.5
 # Catalog problem -> recordings.qc_reason for clips rejected as failed attempts.
-FAILED_ATTEMPT_REASONS = {"empty_audio": "empty", "too_short": "too_short", "too_long": "too_long"}
+FAILED_ATTEMPT_REASONS = {
+    "empty_audio": "empty",
+    "too_short": "too_short",
+    "too_long": "too_long",
+    "no_speech": "no_speech",
+}
 _MEDIA_PROBLEMS = {"image": "image", "video": "video", "document": "document", "other": "other"}
 
 
@@ -418,7 +423,18 @@ class Engine:
             return "too_short"
         if duration > self.config.clip_seconds.max:
             return "too_long"
+        if self.config.clip_checks.problem(recording.active_seconds, duration) == "no_speech":
+            return "no_speech"
         return None
+
+    def _flag_low_speech(self, recording: Recording) -> None:
+        """Accepted, but mostly silence: marked for review. A clip already flagged
+        (e.g. speaker_check_pending for an uploaded file) keeps its reason."""
+        if (
+            self.config.clip_checks.problem(recording.active_seconds, recording.duration_s) == "low_speech"
+            and recording.qc_status == "pending"
+        ):
+            recording.qc_status, recording.qc_reason = "needs_review", "low_speech"
 
     def audio_in_session(self, turn: Turn) -> Reply:
         participant_id = turn.participant.participant_id
@@ -458,6 +474,7 @@ class Engine:
             assignment.retake_count += 1
             return self.repeat_prompt(turn, assignment, self.r(f"problems.{problem}", **values))
 
+        self._flag_low_speech(turn.recording)
         outcome = handle_response(self.db, assignment.id, turn.recording.id, self.now, self.config)
         if outcome.session_ended:
             finished = self.task_name(assignment.prompt_type)

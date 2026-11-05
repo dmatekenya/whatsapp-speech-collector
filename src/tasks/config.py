@@ -38,6 +38,38 @@ class ClipSeconds(BaseModel):
         return self
 
 
+ClipProblem = Literal["no_speech", "low_speech"]
+
+
+class ClipChecks(BaseModel):
+    """clip_checks: is there speech in a clip?
+
+    The worker measures each voice note on its 16 kHz WAV (src/audio/levels.py):
+    active_seconds is the time in frame_ms frames louder than active_dbfs. The
+    conversation engine applies the rules after the duration check:
+    active_seconds below min_active_seconds is no_speech (rejected, retake);
+    otherwise an active share of the clip below min_active_ratio is low_speech
+    (accepted, flagged for review).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    frame_ms: int = Field(default=30, ge=10, le=1000)
+    active_dbfs: float = Field(default=-45.0, ge=-120, lt=0)
+    min_active_seconds: float = Field(default=1.5, ge=0)
+    min_active_ratio: float = Field(default=0.20, ge=0, le=1)
+
+    def problem(self, active_seconds: float | None, duration_s: float | None) -> ClipProblem | None:
+        """None when the clip wasn't measured (e.g. recordings from before the check)."""
+        if active_seconds is None:
+            return None
+        if active_seconds < self.min_active_seconds:
+            return "no_speech"
+        if duration_s and active_seconds / duration_s < self.min_active_ratio:
+            return "low_speech"
+        return None
+
+
 SpeechType = Literal["scripted", "spontaneous"]
 SPEECH_TYPES: tuple[str, ...] = ("scripted", "spontaneous")
 
@@ -129,6 +161,7 @@ class CollectionConfig(BaseModel):
     max_retakes_per_prompt: int = Field(ge=0)
     targets_minutes: Targets
     clip_seconds: ClipSeconds
+    clip_checks: ClipChecks = ClipChecks()
     # After this long without a message from the participant, their next
     # message starts afresh (welcome back). None: same as assignment_expiry_hours.
     fresh_start_after_hours: float | None = Field(default=None, gt=0)

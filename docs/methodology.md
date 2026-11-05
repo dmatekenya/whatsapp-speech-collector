@@ -112,14 +112,16 @@ Recordings are classified at two levels:
 - A **session** is one task type, up to 10 clips, ending early when that type's target is met.
   The bot then offers the next type, or finishes when every type target is met.
 - **Answer binding:** a voice note answers the open prompt; a swipe-reply binds it to the prompt
-  replied to (same number only). In a free-speech session each clip is a numbered invitation
+  replied to (same number only). To redo a recording, the participant swipe-replies to the same
+  prompt and records again (deleting a voice note in WhatsApp is not reported to the bot); being
+  verified in pre-pilot testing. In a free-speech session each clip is a numbered invitation
   ("Voice note 3 of 10: tell me about anything you like", with a rotating example topic), and every
   accepted voice note counts toward the free-speech target.
 - **Unassigned recordings:** voice notes sent outside a session (before starting, or while asked
   whether to start) are kept but never counted toward any target. Only voice notes in a
   free-speech session count as free speech.
-- **Retakes:** clips that are too short, too long or empty get a retake request (up to 2 retakes
-  per prompt); failed attempts are stored as rejected. A forwarded voice note gets a request to
+- **Retakes:** clips that are too short, too long, empty or without speech get a retake request (up
+  to 2 retakes per prompt); failed attempts are stored as rejected. A forwarded voice note gets a request to
   record it themselves, but does not use up a retake: the prompt stays open.
 - **Too-long sentences (planned):** after a first too-long reading the participant is asked to read
   a little faster; after a second, the sentence is skipped for that person. A sentence that runs
@@ -173,15 +175,37 @@ Recordings are classified at two levels:
 
 ## 8. Quality control
 
-- **On arrival (worker):** duration bounds (5–29 s), empty audio, duplicates, audio origin;
-  retake requests.
+- **On arrival (worker):** duration bounds (5–29 s), empty audio, duplicates, audio origin,
+  speech check; retake requests.
+- **Speech check (energy-based):** the worker measures each voice note on its 16 kHz WAV and
+  stores `active_seconds` (time in 30 ms frames louder than −45 dBFS) and `mean_dbfs` (overall
+  level). After the duration check, for all task types:
+  - under 1.5 s of active audio: rejected as `no_speech`; the participant is asked to hold the
+    microphone button and speak clearly, and the same prompt is sent again. This uses up a retake,
+    like a too-short clip.
+  - otherwise, active audio under 20% of the clip: accepted and counted, but flagged for review
+    (`needs_review`, `low_speech`). A clip already flagged for a speaker check keeps that flag.
+  - Settings are in `config/assignment_settings.yaml` (`clip_checks`); `scripts/check_silence.py`
+    shows the measurements and verdicts for a folder of WAVs, for calibration. Recordings stored
+    before the check are measured by `scripts/backfill_speech_levels.py`, without changing their
+    QC status. The energy check can't tell speech from other loud sound (traffic, music); voice
+    activity detection and ASR come later.
+  - **Calibration:** thresholds were set from pre-pilot test recordings (two speakers, two phones):
+    deliberately silent clips had 0.0–0.5 s of active audio, while the shortest real speech clip of
+    5 s or more had 2.4 s; listening confirmed both groups. WebRTC voice activity detection was
+    also tried and rejected for this check, because it reported ~2 s of "speech" in a near-silent
+    clip. Thresholds are to be recalibrated on pilot data.
 - **Duration monitoring (planned, daily during collection):** a report of the clip-length
   distribution per task type (median, p10/p90, % under the minimum, % over the maximum); per
   sentence (median duration, seconds per character, outliers); and per participant (median
   duration, % too short or too long, retake rate, forwarded attempts). Participants who
   consistently rush, cut off or run long are followed up by a supervisor; automatic nudges from the
   bot may come later.
-- **Planned fast QC (CPU):** loudness, clipping, silence ratio, voice activity, SNR estimate.
+- **Planned fast QC (CPU):** clipping, voice activity, SNR estimate.
+- **Planned daily batch job (CPU):** run over each day's recordings: speech/noise detection with a
+  stronger voice activity model (e.g. Silero VAD) to catch loud non-speech clips; speaker
+  consistency checks (uploaded clips first); and the duration report. Results feed supervisor
+  follow-up and the `needs_review` queue.
 - **Batch ASR (GPU, every few days):** transcribe with the fine-tuned Chichewa Whisper model;
   compare read speech against the prompt (CER) to accept, send to human review, or reject.
 - **Planned speaker check:** compare uploaded clips (and later all clips) with a voice profile
@@ -228,3 +252,5 @@ Recordings are classified at two levels:
 | 2026-11-05 | Two-level classification: each task type has a speech type, scripted (sentences) or spontaneous (pictures, conversation starters, free speech); derived from the task type, not stored per recording; reports sum minutes per speech type (target 30% scripted, 70% spontaneous) |
 | 2026-11-05 | Primary recording device (type phone/tablet/computer, brand, model) collected at registration as optional participant attributes, since WhatsApp and Meta don't report the device |
 | 2026-11-05 | Pilot runs on the Meta Cloud API number (+1 618); the Twilio number stays only as a fallback until retired |
+| 2026-11-05 | Speech check on arrival (energy-based, 30 ms frames above −45 dBFS): under 1.5 s of active audio rejected as `no_speech` with a retake request (uses a retake); under 20% active accepted but flagged `low_speech`; `active_seconds` and `mean_dbfs` stored per recording, older recordings backfilled without changing their QC status; thresholds to be calibrated on pilot data |
+| 2026-11-05 | Pre-pilot testing by a tester: silent voice notes were being accepted (fixed by the speech check); uploaded audio accepted by design (flagged for a speaker check, to be run in a daily batch job); redo by swipe-replying to the prompt, since WhatsApp deletions aren't reported to the bot |

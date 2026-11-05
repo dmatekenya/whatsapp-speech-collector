@@ -92,12 +92,16 @@ class ChatHarness:
         duplicate: bool = False,
         reply_to: str | None = None,
         origin: str = "unknown",
+        active_seconds: float | None = None,
     ) -> list[Sent]:
-        """A voice note. origin: recorded, forwarded, uploaded or unknown (Twilio)."""
+        """A voice note. origin: recorded, forwarded, uploaded or unknown (Twilio).
+        active_seconds: as the worker measures it (None: not measured, no speech check)."""
         payload = {"Body": "", "NumMedia": "1", "MediaContentType0": "audio/ogg"}
         if reply_to or (reply and self.last_prompt_sid):
             payload["OriginalRepliedMessageSid"] = reply_to or self.last_prompt_sid
-        return self._turn("MM", payload, "audio", seconds=seconds, duplicate=duplicate, origin=origin)
+        return self._turn(
+            "MM", payload, "audio", seconds=seconds, duplicate=duplicate, origin=origin, active_seconds=active_seconds
+        )
 
     def image(self) -> list[Sent]:
         return self._turn("MM", {"Body": "", "NumMedia": "1", "MediaContentType0": "image/jpeg"}, "other")
@@ -116,6 +120,7 @@ class ChatHarness:
         seconds: float | None,
         duplicate: bool,
         origin: str = "unknown",
+        active_seconds: float | None = None,
     ) -> str:
         sid = f"{prefix}{uuid.uuid4().hex}"
         payload = {"MessageSid": sid, "From": f"whatsapp:{self.phone_number}", **payload}
@@ -142,6 +147,7 @@ class ChatHarness:
                     participant_id=participant.participant_id,
                     status="stored",
                     duration_s=seconds,
+                    active_seconds=active_seconds,
                     content_sha256=digest,
                 )
                 apply_audio_origin(recording, origin)  # as the worker does
@@ -159,8 +165,9 @@ class ChatHarness:
         seconds: float | None = None,
         duplicate: bool = False,
         origin: str = "unknown",
+        active_seconds: float | None = None,
     ) -> list[Sent]:
-        sid = self._store(prefix, payload, message_type, seconds, duplicate, origin)
+        sid = self._store(prefix, payload, message_type, seconds, duplicate, origin, active_seconds)
         pending = respond(sid, now=self.now)
         if pending:
             send_outbound(pending[0], self.channel, self.now)

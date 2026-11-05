@@ -254,6 +254,40 @@ def test_failed_attempts_then_a_good_take(chat: ChatHarness) -> None:
     assert free_speech == []
 
 
+def test_no_speech_uses_up_retakes_like_too_short(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    prompt = only(chat.text("1"))
+    no_speech = CATALOG.raw("problems.no_speech")
+
+    for _ in range(2):
+        reply = only(chat.voice(12, active_seconds=0.3))
+        assert any(reply.startswith(variant) for variant in no_speech) and prompt in reply
+    moved_on = only(chat.voice(12, active_seconds=1.0))
+    assert moved_on.startswith(text_of("problems.retake_limit")) and "Sentence 2 of 3:" in moved_on
+
+    a1 = assignments()[0]
+    assert a1.status == "skipped" and a1.retake_count == 2
+    assert [(r.qc_status, r.qc_reason) for r in recordings()] == [("rejected", "no_speech")] * 3
+    assert minutes()["sentence"] == 0
+
+
+def test_low_speech_is_counted_and_keeps_an_earlier_flag(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.text("1")
+
+    assert only(chat.voice(20, active_seconds=2)).startswith("✅ Received.")
+    # Uploaded and mostly silent: the speaker check flag stays (one reason per clip).
+    assert only(chat.voice(20, active_seconds=2, origin="uploaded")).startswith("✅ Received.")
+    assert only(chat.voice(20, active_seconds=12)).startswith("✅ That's 3 recordings.")  # session over
+
+    assert [(r.qc_status, r.qc_reason) for r in recordings()] == [
+        ("needs_review", "low_speech"),
+        ("needs_review", "speaker_check_pending"),
+        ("pending", None),
+    ]
+    assert minutes()["sentence"] == pytest.approx(60 / 60)
+
+
 def test_free_speech_stays_unlinked(chat: ChatHarness) -> None:
     chat.voice(8)  # idle: no open prompt
     (clip,) = recordings()

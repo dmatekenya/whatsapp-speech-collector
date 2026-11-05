@@ -94,6 +94,7 @@ def required_keys(task_types: Iterable[str], unprompted: Iterable[str] = ()) -> 
         "empty_audio",
         "too_short",
         "too_long",
+        "no_speech",
         "duplicate",
         "retake_limit",
         "not_recorded",

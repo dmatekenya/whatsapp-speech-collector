@@ -90,6 +90,8 @@ and rejected views are produced by export.
 | `duration_s` | float | |
 | `sample_rate`, `channels` | int | Of the WAV: 16000, 1 |
 | `size_bytes` | bigint | |
+| `active_seconds` | float, nullable | Seconds of the WAV with sound in it: 30 ms frames louder than −45 dBFS (`config/assignment_settings.yaml`, `clip_checks`). Measured by the worker (`src/audio/levels.py`). Null = not measured: rows from before migration `e5b9d3f7a612` until `scripts/backfill_speech_levels.py` is run, or a failed measurement (the speech check is then skipped) |
+| `mean_dbfs` | float, nullable | Overall RMS level of the WAV in dBFS (0 = full scale; digital silence −120). Measured with `active_seconds` |
 | `content_sha256` | text, indexed | Hash of the original audio; identical files = forwarded or re-sent |
 | `duplicate_of_recording_id` | FK → recordings, nullable | Points to the earliest-received recording with the same hash |
 | `provider_media_deleted` | bool | Media removed from the provider after safe storage. Twilio only: Meta keeps received media for a limited time, so nothing is deleted |
@@ -99,7 +101,7 @@ and rejected views are produced by export.
 | `status` | text | Storage status: `pending`, `stored`, `failed` |
 | `error` | text, nullable | |
 | `qc_status` | text, indexed | Whether the clip is usable: `pending`, `accepted`, `rejected`, `needs_review`. Rejected clips never count toward minutes; `needs_review` ones do |
-| `qc_reason` | text, nullable | `too_short`, `too_long`, `empty` (failed attempts, set by the conversation engine); `not_recorded` (forwarded audio, rejected); `speaker_check_pending` (uploaded audio, `needs_review`); the QC step will add e.g. `no_speech`, `duplicate`, `wrong_sentence` |
+| `qc_reason` | text, nullable | `too_short`, `too_long`, `empty`, `no_speech` (failed attempts, rejected, set by the conversation engine); `low_speech` (accepted but mostly silence, `needs_review`); `not_recorded` (forwarded audio, rejected); `speaker_check_pending` (uploaded audio, `needs_review`; kept if the clip is also low speech). The QC step will add e.g. `duplicate`, `wrong_sentence` |
 | `created_at`, `updated_at` | timestamptz | |
 
 ### participants

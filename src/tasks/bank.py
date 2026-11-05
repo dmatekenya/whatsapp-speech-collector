@@ -532,7 +532,7 @@ def record_failed_attempt(
     db: Session, assignment_id: int, recording_id: int, reason: str
 ) -> Recording:
     """A clip sent for this assignment that can't be used (too_short, too_long,
-    empty, or not_recorded: forwarded).
+    empty, no_speech, or not_recorded: forwarded).
 
     It's linked to the assignment, so it isn't an unassigned recording, and
     rejected, so it never counts toward minutes. assignment.recording_id keeps pointing at the

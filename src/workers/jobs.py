@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from src.audio.convert import probe, to_wav
+from src.audio.levels import SpeechLevels, measure_wav
 from src.channels.base import TWILIO, ChannelAdapter, MediaDeleteError, audio_origin
 from src.channels.base import InboundMessage as ChannelMessage
 from src.channels.factory import get_channel
@@ -69,6 +70,17 @@ def _has_stored_recording(session: Session, message_id: int) -> bool:
 # =====
 # AUDIO
 # =====
+def _measure_levels(wav: Path, recording_id: int) -> SpeechLevels | None:
+    """Speech levels for config clip_checks. None if they can't be measured: the
+    recording is still stored, and the conversation engine skips the speech check."""
+    checks = get_collection_config().clip_checks
+    try:
+        return measure_wav(wav, checks.frame_ms, checks.active_dbfs)
+    except Exception:
+        logger.exception("Could not measure speech levels of recording id=%s", recording_id)
+        return None
+
+
 def _store_recording(
     session: Session,
     recording: Recording,
@@ -98,6 +110,7 @@ def _store_recording(
             scratch_wav = Path(scratch) / "audio.wav"
             to_wav(scratch_original, scratch_wav)
             info = probe(scratch_wav)
+            levels = _measure_levels(scratch_wav, recording.id)
 
             storage.save(original_path, data)
             wav_size = storage.save(wav_path, scratch_wav)
@@ -119,6 +132,8 @@ def _store_recording(
     recording.sample_rate = info.sample_rate
     recording.channels = info.channels
     recording.size_bytes = wav_size
+    recording.active_seconds = levels.active_seconds if levels else None
+    recording.mean_dbfs = levels.mean_dbfs if levels else None
     recording.content_sha256 = content_sha256
     # Meta only; None for Twilio, which doesn't say.
     recording.is_voice_note = inbound.is_voice_note
@@ -141,10 +156,11 @@ def _store_recording(
                 change.new,
             )
     logger.info(
-        "Stored recording id=%s folder=%s duration=%.2fs from=%s",
+        "Stored recording id=%s folder=%s duration=%.2fs active=%s from=%s",
         recording.id,
         folder,
         info.duration_s,
+        f"{levels.active_seconds:.2f}s" if levels else "unmeasured",
         mask_phone(message.sender),
     )
 

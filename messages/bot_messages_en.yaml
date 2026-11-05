@@ -189,7 +189,11 @@ problems:
   empty_audio: "That voice note seems to be empty. Please record it again."
   too_short: "That recording was very short ({duration} seconds). Please record it again, aiming for at least {min_seconds} seconds."
   too_long: "That recording was {duration} seconds, longer than the {max_seconds}-second limit. Please record it again, a little shorter."
-  no_speech: "I couldn't hear any speech in that recording. Please find a quiet place and try again."
+  # Very little sound in the clip (config clip_checks); the prompt is sent again after it.
+  no_speech:
+    - "We couldn't hear you. Please hold the microphone button and speak clearly, close to the phone."
+    - "We couldn't hear any speech in that voice note. Please hold the microphone button the whole time you speak, and speak clearly."
+    - "Sorry, we couldn't hear you. Please find a quiet place, hold the microphone button and speak clearly."
   too_quiet: "That recording was very quiet. Please hold the phone a little closer and try again."
   too_loud: "That recording was distorted. Please hold the phone a little further away and try again."
   duplicate: "It looks like you've sent this recording before. Please record a new voice note."

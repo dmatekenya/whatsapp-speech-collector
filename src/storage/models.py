@@ -217,6 +217,11 @@ class Recording(Base):
     sample_rate: Mapped[int | None]
     channels: Mapped[int | None]
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)  # WAV file size
+    # Measured on the WAV (src/audio/levels.py, settings in config clip_checks):
+    # seconds in frames above the activity threshold, and the overall RMS level.
+    # None: not measured (older rows until backfilled, or the measurement failed).
+    active_seconds: Mapped[float | None] = mapped_column(Float)
+    mean_dbfs: Mapped[float | None] = mapped_column(Float)
     # SHA-256 of the original bytes as received. Not unique: exact duplicates
     # (forwarded or re-sent voice notes) are stored and only flagged.
     content_sha256: Mapped[str | None] = mapped_column(Text, index=True)
@@ -240,9 +245,10 @@ class Recording(Base):
     error: Mapped[str | None] = mapped_column(Text)
     # Quality: storage status above says the file is safe; this says whether
     # the clip is usable. The conversation engine rejects clips that are
-    # empty, too short or too long; the QC step will set the rest.
+    # empty, too short, too long or have no speech, and flags low_speech;
+    # the QC step will set the rest.
     qc_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending", index=True)
-    qc_reason: Mapped[str | None] = mapped_column(Text)  # e.g. too_short, too_long, empty
+    qc_reason: Mapped[str | None] = mapped_column(Text)  # e.g. too_short, no_speech, low_speech
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

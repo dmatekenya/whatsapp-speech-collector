@@ -28,6 +28,14 @@
 #   the registry (participants.attributes.targets_minutes): {per_participant: 6} (split as here),
 #   or explicit per-type minutes, e.g. {sentence: 2, image: 1, conversation_starter: 1}.
 # - clip_seconds: accepted recording length; shorter or longer clips get a retake request.
+# - clip_checks: is there speech in the clip? The worker measures every voice note on its 16 kHz
+#   WAV: active seconds = time in frame_ms frames whose level is above active_dbfs (dBFS; 0 is the
+#   loudest possible). Applied after the duration check, for all task types:
+#   - fewer than min_active_seconds active: rejected (QC reason no_speech) and a retake request,
+#     which uses up a retake like a too-short clip;
+#   - otherwise, active share of the clip below min_active_ratio: accepted and counted, but marked
+#     for review (QC needs_review, reason low_speech).
+#   Measure real clips with scripts/check_silence.py before changing these.
 # - fresh_start_after_hours: after this long without a message from the participant, their next
 #   message pauses any open session and gets the welcome-back summary (progress, today's task).
 #   A voice note swiped onto a still-unexpired prompt is the exception: it is taken as the answer.
@@ -57,6 +65,11 @@ targets_minutes:              # per participant
   # 6 + 5 + 5 + 4 minutes: 30% scripted (sentences), 70% spontaneous (the rest).
   split: {sentence: 0.30, image: 0.25, conversation_starter: 0.25, free_speech: 0.20}
 clip_seconds: {min: 5, max: 29}
+clip_checks:
+  frame_ms: 30                # analysis frame length
+  active_dbfs: -45            # a frame louder than this has sound in it
+  min_active_seconds: 1.5     # less sound than this: no_speech (rejected, retake)
+  min_active_ratio: 0.20      # sound in less than 20% of the clip: low_speech (accepted, flagged)
 fresh_start_after_hours: 24   # same as assignment_expiry_hours
 reply_window_hours: 23.5
 audio_origin:

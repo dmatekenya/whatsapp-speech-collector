@@ -3,11 +3,14 @@
     uv run python -m scripts.send_test_image --prompt-id I0001 --to +1XXXXXXXXXX
     uv run python -m scripts.send_test_image --prompt-id I0001 --to +1XXXXXXXXXX --caption "Describe this"
     uv run python -m scripts.send_test_image --prompt-id I0001 --to +1XXXXXXXXXX --dry-run
+    uv run python -m scripts.send_test_image --prompt-id I0001 --to +1XXXXXXXXXX --channel meta
 
 Builds a signed media URL (GET /media/prompts/{token} under PUBLIC_BASE_URL),
-sends it with the channel adapter's send_media, and prints the message SID.
-The API must be running and reachable at PUBLIC_BASE_URL (e.g. via ngrok)
-while Twilio fetches the image.
+sends it with the channel adapter's send_media, and prints the provider's
+message ID. The channel is --channel, or WHATSAPP_PROVIDER if not given (this
+message answers nothing, so there's no inbound channel to follow). The API
+must be running and reachable at PUBLIC_BASE_URL (e.g. via ngrok) while
+Twilio or Meta fetches the image.
 """
 
 import argparse
@@ -15,7 +18,9 @@ import sys
 
 from sqlalchemy import select
 
+from src.channels.base import CHANNELS
 from src.channels.factory import get_channel
+from src.config import get_settings
 from src.importers.framework import load_config
 from src.importers.participants import DEFAULT_CONFIG as PARTICIPANTS_CONFIG
 from src.logging_config import mask_phone
@@ -32,6 +37,7 @@ def main() -> None:
     parser.add_argument("--to", required=True, help="recipient's WhatsApp number, e.g. +1XXXXXXXXXX")
     parser.add_argument("--caption", help="text shown under the image")
     parser.add_argument("--ttl", type=int, default=DEFAULT_TTL_SECONDS, help="URL lifetime in seconds")
+    parser.add_argument("--channel", choices=CHANNELS, help="twilio or meta (default: WHATSAPP_PROVIDER)")
     parser.add_argument("--dry-run", action="store_true", help="print the URL, send nothing")
     args = parser.parse_args()
 
@@ -57,8 +63,9 @@ def main() -> None:
         print(f"dry run: not sending {prompt.prompt_id} to {mask_phone(to)}")
         return
 
-    sid = get_channel().send_media(to, url, caption=args.caption)
-    print(f"sent {prompt.prompt_id} to {mask_phone(to)}: message SID {sid}")
+    channel = args.channel or get_settings().whatsapp_provider
+    sid = get_channel(channel).send_media(to, url, caption=args.caption)
+    print(f"sent {prompt.prompt_id} via {channel} to {mask_phone(to)}: message ID {sid}")
 
 
 if __name__ == "__main__":

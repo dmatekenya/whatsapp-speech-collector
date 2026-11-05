@@ -32,14 +32,18 @@ T0 = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
 CATALOG = get_catalog()
 
 
-def config(**targets: float) -> CollectionConfig:
+THIRD = 1 / 3
+SPEECH = {"sentence": "scripted", "image": "spontaneous", "conversation_starter": "spontaneous"}
+
+
+def config() -> CollectionConfig:
     return CollectionConfig.model_validate(
         {
-            "speakers_per_prompt": {"sentence": 5, "image": 5, "conversation_starter": 5},
+            "task_types": {t: {"prompted": True, "speakers_per_prompt": 5, "speech_type": SPEECH[t]} for t in ("sentence", "image", "conversation_starter")},
             "session_size": 3,
             "assignment_expiry_hours": 24,
             "max_retakes_per_prompt": 2,
-            "targets_minutes": {"total": 30, "sentence": 10, "image": 10, "conversation_starter": 10, **targets},
+            "targets_minutes": {"per_participant": 30, "split": {"sentence": THIRD, "image": THIRD, "conversation_starter": THIRD}},
             "clip_seconds": {"min": 5, "max": 30},
         }
     )
@@ -64,7 +68,15 @@ def cfg(monkeypatch: pytest.MonkeyPatch) -> CollectionConfig:
 
 
 def set_targets(monkeypatch: pytest.MonkeyPatch, **targets: float) -> None:
-    monkeypatch.setattr("src.conversation.engine.get_collection_config", lambda: config(**targets))
+    """Give P0001 explicit per-type targets (a participant override; types left out keep 10)."""
+    set_override(targets)
+
+
+def set_override(targets_minutes: dict[str, float]) -> None:
+    with db.get_sync_sessionmaker()() as session:
+        participant = session.scalar(select(Participant).where(Participant.participant_id == "P0001"))
+        participant.attributes = {**(participant.attributes or {}), "targets_minutes": targets_minutes}
+        session.commit()
 
 
 @pytest.fixture
@@ -187,7 +199,8 @@ def test_type_target_reached_with_nothing_next(chat: ChatHarness, monkeypatch: p
     done = only(chat.voice(20))
 
     assert "That's everything for now" in done and state().state == "idle"
-    assert text_of("progress.target_reached", total_target="30.0") in only(chat.text("Hi"))
+    # The total is the sum of the per-type targets: 0.25 + 0 + 0.
+    assert text_of("progress.target_reached", total_target="0.2") in only(chat.text("Hi"))
 
 
 # =======
@@ -218,7 +231,7 @@ def test_retakes_for_short_long_and_empty_then_skip(chat: ChatHarness) -> None:
         (a1.id, "rejected", "empty"),
     ]
     assert a1.recording_id is None
-    assert minutes() == {"sentence": 0.0, "image": 0.0, "conversation_starter": 0.0}
+    assert minutes() == {"sentence": 0.0, "image": 0.0, "conversation_starter": 0.0, "free_speech": 0.0}
 
 
 def test_failed_attempts_then_a_good_take(chat: ChatHarness) -> None:
@@ -311,7 +324,8 @@ def test_expired_assignment_is_treated_as_idle(chat: ChatHarness) -> None:
     assert text_of("ready.ask") in offer and state().state == "awaiting_ready"
     assert assignments()[0].status == "expired"
     with db.get_sync_sessionmaker()() as session:
-        assert session.scalars(select(TaskSession.status)).all() == ["abandoned"]
+        # A gap longer than fresh_start_after_hours: the session is paused.
+        assert session.scalars(select(TaskSession.status)).all() == ["paused"]
 
 
 # ===============
@@ -452,18 +466,39 @@ def test_long_text_goes_before_the_image(world: None) -> None:
     assert [url is not None for _, _, _, url in channel.sent] == [False, True]
 
 
-def test_permanent_send_failure_is_recorded(chat: ChatHarness) -> None:
-    class Refusing(RecordingChannel):
-        def send_text(self, to, body, status_callback=None):  # noqa: ANN001, ANN201
-            raise MessageSendError("Twilio didn't accept the message: HTTP 400, error 63016: outside window", 400, 63016, permanent=True)
+class Refusing(RecordingChannel):
+    """Refuses every send with the given provider error."""
 
-    chat.channel = Refusing()
+    def __init__(self, code: int, permanent: bool = True) -> None:
+        super().__init__()
+        self.code = code
+        self.permanent = permanent
+        self.attempts = 0
+
+    def send_text(self, to, body, status_callback=None):  # noqa: ANN001, ANN201
+        self.attempts += 1
+        raise MessageSendError(
+            f"Twilio didn't accept the message: HTTP 400, error {self.code}: refused", 400, self.code,
+            permanent=self.permanent, details={"provider": "twilio", "http_status": 400, "code": self.code},
+        )  # fmt: skip
+
+    send_media = send_text
+
+
+def row_of(sent) -> OutboundMessage:  # noqa: ANN001
+    with db.get_sync_sessionmaker()() as session:
+        return session.get(OutboundMessage, sent.outbound_id)
+
+
+def test_permanent_send_failure_is_recorded_and_rolls_back(chat: ChatHarness) -> None:
+    chat.channel = Refusing(21211)
     (sent,) = chat.text("Hi")
 
-    with db.get_sync_sessionmaker()() as session:
-        row = session.get(OutboundMessage, sent.outbound_id)
-    assert row.status == "failed" and row.error_code == 63016 and "outside window" in row.error
-    assert state().state == "awaiting_ready"  # state isn't rolled back
+    row = row_of(sent)
+    assert row.status == "failed" and row.error_code == 21211 and "21211" in row.error
+    assert row.error_details == {"provider": "twilio", "http_status": 400, "code": 21211}
+    # Never delivered, so the conversation doesn't move on.
+    assert state().state == "idle" and "welcomed" not in state().context
 
 
 # ==================
@@ -533,3 +568,369 @@ def test_catalog_is_strict() -> None:
     bad = Catalog({**CATALOG.data, "ready": {**CATALOG.data["ready"], "ask": "Ready, {first_nam}?"}})
     with pytest.raises(CatalogError, match="unknown placeholders"):
         bad.validate(["sentence", "image", "conversation_starter"])
+
+
+# ===========
+# FRESH START
+# ===========
+def test_gap_mid_session_gives_the_welcome_back_summary(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.text("1")
+    chat.voice(10)  # sentence 1 answered, sentence 2 open
+    chat.advance(hours=25)
+
+    offer = only(chat.text("Hi"))
+
+    assert text_of("welcome.returning", first_name="Chisomo") in offer
+    assert "So far you have recorded *0.2* of 30.0 minutes" in offer  # progress
+    assert "Today's task is" in offer and text_of("ready.ask") in offer  # today's task
+    assert state().state == "awaiting_ready"
+    assert [a.status for a in assignments()] == ["recorded", "expired"]
+    with db.get_sync_sessionmaker()() as session:
+        assert session.scalars(select(TaskSession.status)).all() == ["paused"]
+
+
+def test_no_fresh_start_within_the_gap(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.text("1")
+    chat.advance(hours=20)
+    assert only(chat.voice(10)).startswith("✅ Received. Sentence 2 of 3:")
+
+
+def use_longer_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prompts stay open for 48 h, but 24 h of silence still means a fresh start."""
+    longer = config().model_copy(update={"assignment_expiry_hours": 48, "fresh_start_after_hours": 24})
+    monkeypatch.setattr("src.conversation.engine.get_collection_config", lambda: longer)
+    monkeypatch.setattr("src.tasks.bank.get_collection_config", lambda: longer)  # mark_sent's expiry
+
+
+def test_swipe_reply_after_the_gap_still_binds_to_an_unexpired_prompt(
+    chat: ChatHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_longer_expiry(monkeypatch)
+    chat.text("Hi")
+    chat.text("1")
+    first = assignments()[0]
+    chat.advance(hours=25)
+
+    answer = only(chat.voice(10, reply=True))
+
+    assert answer.startswith("✅ Received. Sentence 2 of 3:")
+    assert assignments()[0].id == first.id and assignments()[0].status == "recorded"
+    assert recordings()[-1].assignment_id == first.id
+    assert state().state == "in_session"
+
+
+def test_voice_note_after_the_gap_without_a_swipe_starts_afresh(
+    chat: ChatHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_longer_expiry(monkeypatch)
+    chat.text("Hi")
+    chat.text("1")
+    chat.advance(hours=25)
+
+    offer = only(chat.voice(10))
+
+    assert text_of("welcome.returning", first_name="Chisomo") in offer
+    assert assignments()[0].status == "expired"  # unexpired, but expired by the fresh start
+    assert recordings()[-1].assignment_id is None  # kept as free speech
+
+
+# ============
+# REPLY WINDOW
+# ============
+def test_send_is_skipped_outside_the_reply_window(chat: ChatHarness, caplog: pytest.LogCaptureFixture) -> None:
+    sid = chat._store("SM", {"Body": "Hi", "NumMedia": "0"}, "text", None, False)
+    (outbound_id,) = respond(sid, now=T0)
+
+    with caplog.at_level("WARNING", logger="src.conversation.outbound"):
+        assert send_outbound(outbound_id, chat.channel, T0 + timedelta(hours=24)) is None
+
+    with db.get_sync_sessionmaker()() as session:
+        row = session.get(OutboundMessage, outbound_id)
+    assert row.status == "skipped_window" and row.provider_message_id is None
+    assert "24.0 h ago" in row.error
+    assert chat.channel.sent == []
+    assert state().state == "idle"  # their next message gets the welcome
+    (record,) = [r for r in caplog.records if r.levelname == "WARNING"]
+    message = record.getMessage()
+    assert "skipped_window" in message and REGISTERED_SENDER[4:] not in message and "Chisomo" not in message
+
+
+def test_inside_the_window_is_sent(chat: ChatHarness) -> None:
+    sid = chat._store("SM", {"Body": "Hi", "NumMedia": "0"}, "text", None, False)
+    (outbound_id,) = respond(sid, now=T0)
+    assert send_outbound(outbound_id, chat.channel, T0 + timedelta(hours=23)) is not None
+
+
+@pytest.mark.parametrize("code", [131047, 63016])
+def test_outside_window_error_is_not_retried(chat: ChatHarness, code: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.conversation.outbound._last_attempt", lambda: False)  # retries left
+    chat.channel = Refusing(code, permanent=False)
+
+    (sent,) = chat.text("Hi")  # would raise (so RQ retries) for any other transient error
+
+    row = row_of(sent)
+    assert row.status == "skipped_window" and row.error_code == code
+    assert chat.channel.attempts == 1
+    assert state().state == "idle"
+
+
+def test_transient_error_with_retries_left_is_retried(chat: ChatHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.conversation.outbound._last_attempt", lambda: False)
+    chat.channel = Refusing(20429, permanent=False)
+    with pytest.raises(MessageSendError):
+        chat.text("Hi")
+    assert outbound_rows_status() == ["pending"]
+
+
+def outbound_rows_status() -> list[str]:
+    with db.get_sync_sessionmaker()() as session:
+        return list(session.scalars(select(OutboundMessage.status).order_by(OutboundMessage.id)))
+
+
+# ============
+# FAILED SENDS
+# ============
+def test_failed_welcome_then_hi_gives_the_welcome_again(chat: ChatHarness) -> None:
+    chat.channel = Refusing(21211)
+    chat.text("Hi")
+    assert state().state == "idle"
+
+    chat.channel = RecordingChannel()
+    offer = only(chat.text("Hi"))
+
+    assert text_of("welcome.first_time", first_name="Chisomo") in offer
+    assert "For each sentence:" in offer  # the instructions too: never seen
+    assert state().state == "awaiting_ready"
+
+
+def test_failed_first_prompt_returns_to_the_ready_question(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.channel = Refusing(21211)
+    chat.text("1")
+
+    assert state().state == "awaiting_ready"
+    assert [a.status for a in assignments()] == ["expired"]
+    with db.get_sync_sessionmaker()() as session:
+        assert session.scalars(select(TaskSession.status)).all() == ["abandoned"]
+
+    chat.channel = RecordingChannel()
+    assert only(chat.text("1")).startswith("Sentence 1 of 3:")
+
+
+def test_failed_next_prompt_is_sent_again_on_the_next_message(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.text("1")
+    chat.channel = Refusing(21211)
+    chat.voice(10)  # sentence 1 is recorded; sentence 2 isn't delivered
+    assert assignments()[0].status == "recorded"  # the answer stands
+
+    chat.channel = RecordingChannel()
+    again = only(chat.text("hello?"))
+
+    assert again.startswith("Sentence 2 of 3:")
+    assert state().state == "in_session"
+
+
+def test_a_later_turn_is_never_rolled_back(chat: ChatHarness) -> None:
+    sid = chat._store("SM", {"Body": "Hi", "NumMedia": "0"}, "text", None, False)
+    (first_reply,) = respond(sid, now=T0)
+    chat.text("1")  # the next turn has already moved the conversation on
+
+    chat.channel = Refusing(21211)
+    send_outbound(first_reply, chat.channel, T0)
+
+    assert state().state == "in_session"
+
+
+def test_meta_send_error_details_are_stored_without_personal_data(
+    chat: ChatHarness, caplog: pytest.LogCaptureFixture
+) -> None:
+    import httpx
+
+    from src.channels.meta import MetaChannel
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {
+            "message": "(#131026) Message undeliverable to +265991234567",
+            "type": "OAuthException", "code": 131026, "error_subcode": 2494010,
+            "error_user_title": "Message undeliverable", "error_data": {"messaging_product": "whatsapp",
+            "details": "Recipient 265991234567 cannot be reached"}, "fbtrace_id": "AbCdEf123"}})  # fmt: skip
+
+    chat.channel = MetaChannel("token-secret", "100000000000001", transport=httpx.MockTransport(refuse))
+    chat.channel.sent = []  # what the harness reads back
+    with caplog.at_level("WARNING", logger="src.conversation.outbound"):
+        (sent,) = chat.text("Hi")
+
+    row = row_of(sent)
+    assert row.status == "failed" and row.error_code == 131026
+    assert row.error_details == {
+        "provider": "meta", "http_status": 400, "code": 131026, "subcode": 2494010, "type": "OAuthException",
+        "title": "Message undeliverable", "message": "(#131026) Message undeliverable to <number>",
+        "details": "Recipient <number> cannot be reached", "fbtrace_id": "AbCdEf123",
+    }  # fmt: skip
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "code=131026" in logged and "subcode=2494010" in logged and "fbtrace_id=AbCdEf123" in logged
+    for forbidden in ("265991234567", "token-secret", "Chisomo", text_of("ready.ask")):
+        assert forbidden not in logged and forbidden not in str(row.error_details)
+
+
+# =======
+# TARGETS
+# =======
+def test_progress_with_a_per_participant_override(chat: ChatHarness) -> None:
+    set_override({"per_participant": 6})  # split as configured (a third each)
+    chat.text("Hi")
+    chat.text("1")
+    chat.voice(12)
+    progress = only(chat.text("progress"))
+    assert "So far you have recorded *0.2* of 6.0 minutes" in progress
+    assert "Reading sentences: 0.2 of 2.0 min" in progress and "Describing pictures: 0.0 of 2.0 min" in progress
+
+
+def test_progress_with_explicit_per_type_targets_totals_their_sum(chat: ChatHarness) -> None:
+    set_override({"sentence": 3, "image": 1.5, "conversation_starter": 0.5})
+    chat.text("Hi")
+    chat.text("1")
+    chat.voice(12)
+    progress = only(chat.text("progress"))
+    assert "So far you have recorded *0.2* of 5.0 minutes" in progress
+    assert "Reading sentences: 0.2 of 3.0 min" in progress and "Answering questions: 0.0 of 0.5 min" in progress
+
+
+# ===========
+# FREE SPEECH
+# ===========
+def free_speech_config() -> CollectionConfig:
+    """Four types, half a minute each. Only free_speech can run: the test bank has no prompts."""
+    return CollectionConfig.model_validate(
+        {
+            "task_types": {
+                **{t: {"prompted": True, "speakers_per_prompt": 5, "speech_type": SPEECH[t]} for t in ("sentence", "image", "conversation_starter")},
+                "free_speech": {"prompted": False, "speech_type": "spontaneous"},
+            },
+            "session_size": 5,
+            "assignment_expiry_hours": 24,
+            "max_retakes_per_prompt": 2,
+            "targets_minutes": {"per_participant": 2, "split": dict.fromkeys(("sentence", "image", "conversation_starter", "free_speech"), 0.25)},
+            "clip_seconds": {"min": 5, "max": 29},
+        }
+    )
+
+
+@pytest.fixture
+def free_chat(clean_db: None, monkeypatch: pytest.MonkeyPatch) -> ChatHarness:
+    add_participant("P0001", REGISTERED_SENDER, name="Chisomo Banda")
+    current = free_speech_config()
+    monkeypatch.setattr("src.conversation.engine.get_collection_config", lambda: current)
+    monkeypatch.setattr("src.tasks.bank.get_collection_config", lambda: current)
+    return ChatHarness(REGISTERED_SENDER, start=T0)
+
+
+def test_free_speech_session_end_to_end(free_chat: ChatHarness) -> None:
+    offer = only(free_chat.text("Hi"))
+    assert text_of("today.free_speech") in offer
+    assert "For each voice note:" in offer and "Talk for about 5 to 29 seconds." in offer
+
+    first = only(free_chat.text("1"))
+    assert first.startswith("Voice note 1 of 5: tell me about anything you like.")
+    (invitation,) = assignments()
+    assert invitation.prompt_id is None and invitation.prompt_type == "free_speech"
+    assert state().state == "in_session"
+
+    # Same retake rules as other types.
+    retake = only(free_chat.voice(3))
+    assert retake.startswith(text_of("problems.too_short", duration="3", min_seconds="5"))
+    assert "Voice note 1 of 5:" in retake
+
+    assert only(free_chat.voice(10)).startswith("✅ Received. Voice note 2 of 5:")
+    assert "For each voice note:" in only(free_chat.text("INSTRUCTIONS"))
+
+    progress = only(free_chat.text("progress"))
+    assert progress.splitlines() == [
+        "So far you have recorded *0.2* of 2.0 minutes:",
+        "• Reading sentences: 0.0 of 0.5 min",
+        "• Describing pictures: 0.0 of 0.5 min",
+        "• Answering questions: 0.0 of 0.5 min",
+        "• Talking about anything: 0.2 of 0.5 min",
+    ]
+
+    free_chat.voice(12)
+    done = only(free_chat.voice(15))  # 37 s: the 0.5-minute target is met
+    assert "You've finished *talking about anything*" in done
+    assert "That's everything for now" in done  # no prompts for the other types
+    assert [a.status for a in assignments()] == ["recorded"] * 3  # ended early, before 5
+    with db.get_sync_sessionmaker()() as session:
+        assert session.scalars(select(TaskSession.status)).all() == ["completed"]
+    assert minutes()["free_speech"] == pytest.approx(37 / 60)
+
+
+def test_free_speech_is_chosen_like_any_type_with_a_target(free_chat: ChatHarness) -> None:
+    from src.tasks.bank import choose_task_type
+
+    with db.get_sync_sessionmaker()() as session:
+        assert choose_task_type(session, "P0001", T0, free_speech_config()) == "free_speech"
+
+
+# ============
+# AUDIO ORIGIN
+# ============
+def test_recorded_voice_note_is_accepted(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.text("1")
+    assert only(chat.voice(10, origin="recorded")).startswith("✅ Received. Sentence 2 of 3:")
+    recording = recordings()[-1]
+    assert recording.audio_origin == "recorded" and recording.qc_status == "pending"
+    assert minutes()["sentence"] > 0
+
+
+def test_forwarded_voice_note_while_a_sentence_is_open(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.text("1")
+    first = assignments()[0]
+
+    reply = only(chat.voice(10, origin="forwarded"))
+
+    assert reply.startswith(text_of("problems.not_recorded"))
+    assert "Sentence 1 of 3:" in reply and first.prompt_text_snapshot in reply  # the same prompt
+    recording = recordings()[-1]
+    assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
+    assert recording.assignment_id == first.id  # linked as a failed attempt
+    assignment = assignments()[0]
+    assert assignment.status == "sent" and assignment.retake_count == 0 and assignment.recording_id is None
+    assert minutes()["sentence"] == 0
+
+    # More forwards never use up the retakes (max 2) or skip the prompt.
+    for _ in range(3):
+        assert "Sentence 1 of 3:" in only(chat.voice(10, origin="forwarded"))
+    assert assignments()[0].status == "sent"
+    assert only(chat.voice(10, origin="recorded")).startswith("✅ Received. Sentence 2 of 3:")
+
+
+def test_forwarded_voice_note_outside_a_session_is_rejected_with_the_usual_reply(chat: ChatHarness) -> None:
+    offer = only(chat.voice(10, origin="forwarded"))  # idle: the offer, as before
+    assert text_of("ready.ask") in offer
+    chat_reply = only(chat.voice(10, origin="forwarded"))  # awaiting_ready: as before
+    assert chat_reply == text_of("ready.ask")
+    for recording in recordings():
+        assert recording.assignment_id is None
+        assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
+
+
+def test_uploaded_audio_is_counted_but_flagged(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.text("1")
+    assert only(chat.voice(10, origin="uploaded")).startswith("✅ Received. Sentence 2 of 3:")
+    recording = recordings()[-1]
+    assert (recording.qc_status, recording.qc_reason) == ("needs_review", "speaker_check_pending")
+    assert recording.assignment_id == assignments()[0].id
+    assert minutes()["sentence"] == pytest.approx(10 / 60)
+
+
+def test_unknown_origin_behaves_as_before(chat: ChatHarness) -> None:
+    chat.text("Hi")
+    chat.text("1")
+    assert only(chat.voice(10)).startswith("✅ Received. Sentence 2 of 3:")
+    recording = recordings()[-1]
+    assert recording.audio_origin == "unknown" and recording.qc_status == "pending"

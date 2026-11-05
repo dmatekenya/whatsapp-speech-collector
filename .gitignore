@@ -97,8 +97,9 @@ src/*/_version.py
 # uv virtual environment
 .venv/
 
-# Data 
-data/
+# Data (real participant lists, prompts and audio). Only the example file is committed.
+data/*
+!data/participants.example.csv
 
 # Environment files with real values (the examples are committed)
 .env.*

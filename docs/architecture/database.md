@@ -43,30 +43,33 @@ erDiagram
 
 A voice note's journey: `inbound_messages` (raw) → `recordings` (stored audio) → linked to an
 `assignments` row (which prompt it answered) → which points to `prompts` (what was asked) and
-`participants` (who answered). A recording without an assignment is free speech.
+`participants` (who answered). In a `free_speech` session the assignment is an invitation to talk,
+with no prompt. A recording without an assignment is an *unassigned recording*: a voice note sent
+outside a session, kept but never counted toward any target.
 
 ## Tables
 
 ### inbound_messages
 
-Every message Twilio delivers to the webhook, stored before any processing. Restricted: contains
-phone numbers.
+Every message delivered to either webhook (Twilio: `POST /whatsapp/webhook`; Meta Cloud API:
+`POST /webhooks/meta`), stored before any processing. Restricted: contains phone numbers (Meta's
+`wamid…` IDs embed the sender's number too).
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | bigint, PK | |
-| `message_sid` | text, unique | Twilio message ID (`SM…` text, `MM…` media). Deduplicates Twilio retries |
-| `channel` | text | `twilio` (Meta Cloud API later) |
+| `message_sid` | text, unique | Provider message ID: Twilio `SM…`/`MM…`, Meta `wamid.…`. Deduplicates webhook retries |
+| `channel` | text | `twilio` or `meta`: the webhook it arrived on. Replies go out on the same channel |
 | `sender` | text | E.164 phone number |
 | `message_type` | text | `text`, `audio`, `other` |
-| `raw_payload` | JSONB | Full Twilio form payload, for replay and debugging |
+| `raw_payload` | JSONB | Twilio: the full form payload. Meta: `{"message": …, "metadata": …}` for this one message (a webhook call can carry several; contact names are dropped). Read back through the channel adapter's `parse_inbound` |
 | `participant_id` | text, nullable | Set by the worker after the registry lookup |
 | `status` | text | `received` → `queued` → `processed`, or `failed`, `unregistered` |
 | `attempts` | int | Processing attempts |
 | `error` | text, nullable | Last error |
 | `received_at` | timestamptz | |
 | `processed_at` | timestamptz, nullable | |
-| `media_deleted_at` | timestamptz, nullable | When the media was deleted from Twilio (after storage, or without download for unregistered senders); it can't be downloaded after this |
+| `media_deleted_at` | timestamptz, nullable | When the media was deleted from Twilio (after storage, or without download for unregistered senders); it can't be downloaded after this. Always null for Meta |
 
 ### recordings
 
@@ -79,7 +82,7 @@ and rejected views are produced by export.
 | `id` | bigint, PK | Used in file names (`R000123`) |
 | `inbound_message_id` | FK → inbound_messages, unique | One recording per message |
 | `participant_id` | text, nullable | Null only for recordings made before the registry existed |
-| `assignment_id` | FK → assignments, nullable | Null = free speech (no prompt). Failed attempts at a prompt are linked too (and rejected) |
+| `assignment_id` | FK → assignments, nullable | The prompt or free-speech invitation it answers. Null = an unassigned recording (sent outside a session; never counted). Failed attempts are linked too (and rejected) |
 | `folder` | text | Participant folder (or `_unassigned`) |
 | `original_path` | text | Relative to `audio_root` |
 | `wav_path` | text | Relative to `audio_root` |
@@ -89,11 +92,14 @@ and rejected views are produced by export.
 | `size_bytes` | bigint | |
 | `content_sha256` | text, indexed | Hash of the original audio; identical files = forwarded or re-sent |
 | `duplicate_of_recording_id` | FK → recordings, nullable | Points to the earliest-received recording with the same hash |
-| `twilio_media_deleted` | bool | Media removed from Twilio after safe storage |
+| `provider_media_deleted` | bool | Media removed from the provider after safe storage. Twilio only: Meta keeps received media for a limited time, so nothing is deleted |
+| `is_voice_note` | bool, nullable | Meta only: `true` recorded in WhatsApp, `false` an uploaded audio file. Null for Twilio, which doesn't say |
+| `forwarded` | text, nullable | Meta only: `no`, `forwarded`, `frequently_forwarded`. Null for Twilio |
+| `audio_origin` | text | `recorded`, `forwarded`, `uploaded` or `unknown`, from the two columns above: forwarded wins, then `is_voice_note`; Twilio rows are `unknown`. `config/assignment_settings.yaml` (`audio_origin`) decides what happens: forwarded is rejected (`not_recorded`), uploaded is counted but flagged (`speaker_check_pending`), recorded and unknown are used as usual. Backfilled for older rows by migration `d8e2b5c1f9a4` |
 | `status` | text | Storage status: `pending`, `stored`, `failed` |
 | `error` | text, nullable | |
-| `qc_status` | text, indexed | Whether the clip is usable: `pending`, `accepted`, `rejected`, `needs_review`. Rejected clips never count toward minutes |
-| `qc_reason` | text, nullable | Set by the conversation engine for failed attempts: `too_short`, `too_long`, `empty`; the QC step will add e.g. `no_speech`, `duplicate`, `wrong_sentence` |
+| `qc_status` | text, indexed | Whether the clip is usable: `pending`, `accepted`, `rejected`, `needs_review`. Rejected clips never count toward minutes; `needs_review` ones do |
+| `qc_reason` | text, nullable | `too_short`, `too_long`, `empty` (failed attempts, set by the conversation engine); `not_recorded` (forwarded audio, rejected); `speaker_check_pending` (uploaded audio, `needs_review`); the QC step will add e.g. `no_speech`, `duplicate`, `wrong_sentence` |
 | `created_at`, `updated_at` | timestamptz | |
 
 ### participants
@@ -110,7 +116,7 @@ The registry, loaded from batch CSV files with `scripts/import_participants.py` 
 | `is_test` | bool | Test participants are excluded from dataset exports |
 | `batch` | text | Source file name |
 | `enrolled_on` | date | |
-| `attributes` | JSONB | Configurable fields: `age`, `sex`, `district`, `first_language`, `accent`, optional `targets_minutes` override |
+| `attributes` | JSONB | Configurable fields (`config/participants.yaml`): `age`, `sex`, `district`, `first_language`, `accent`, and the optional primary recording device from registration: `primary_device_type` (`phone`, `tablet`, `computer`), `primary_device_brand`, `primary_device_model`. Also an optional `targets_minutes` override: `{"per_participant": 6}` (split as in `config/assignment_settings.yaml`, each type rounded to 0.5 min) or explicit per-type minutes, e.g. `{"sentence": 2, "image": 1, "conversation_starter": 1}` (types left out keep the default). The total shown to the participant is always the sum of the per-type targets |
 | `created_at`, `updated_at` | timestamptz | |
 
 ### prompts
@@ -146,7 +152,7 @@ when that type's target is met.
 |---|---|---|
 | `id` | bigint, PK | |
 | `participant_id` | FK → participants | At most one active session per participant |
-| `task_type` | text | `sentence`, `image`, `conversation_starter` |
+| `task_type` | text | A type from `task_types` in `config/assignment_settings.yaml`: `sentence`, `image`, `conversation_starter`, `free_speech` |
 | `status` | text | `active`, `completed`, `paused`, `abandoned` |
 | `size` | int | Planned number of prompts |
 | `started_at`, `ended_at` | timestamptz | |
@@ -154,19 +160,21 @@ when that type's target is met.
 ### assignments
 
 Every time a prompt is sent to someone. Drives coverage (how many speakers each prompt has) and
-links each recording to what was asked.
+links each recording to what was asked. Unprompted types (`free_speech`) have a row per invitation
+to talk, with no prompt (`prompt_id` null) and no coverage; everything else (session position,
+expiry, retakes, minutes) works the same.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | bigint, PK | |
 | `participant_id` | FK → participants | Unique with `prompt_id`: nobody gets the same prompt twice |
-| `prompt_id` | FK → prompts | |
-| `prompt_type` | text | |
+| `prompt_id` | FK → prompts, nullable | Null for unprompted types (`free_speech`) |
+| `prompt_type` | text | The task type, including `free_speech` |
 | `session_id` | FK → sessions | Unique with `position` |
 | `position` | int | 1…session size ("Sentence 4 of 10") |
 | `prompt_text_snapshot` | text, nullable | Exactly what was sent; the reference text for the faithfulness check |
 | `status` | text | `sent` → `recorded` → `accepted` / `rejected`, or `expired`, `skipped` |
-| `outbound_message_sid` | text, indexed | Twilio ID of the message carrying the prompt; matches swipe-replies |
+| `outbound_message_sid` | text, indexed | Provider ID of the message carrying the prompt (Twilio SID or Meta wamid); matches swipe-replies, but only from the same channel (checked against `outbound_messages.channel` and `provider_message_id`) |
 | `retake_count` | int | |
 | `sent_at`, `expires_at`, `answered_at` | timestamptz | Unanswered assignments expire after `assignment_expiry_hours` |
 | `recording_id` | FK → recordings, nullable | The newest recording that answered it and wasn't rejected (failed attempts link to the assignment but don't replace this) |
@@ -181,11 +189,18 @@ Where each participant is in the conversation. One row per participant, created 
 message. Read and written by the conversation engine (`src/conversation/engine.py`) under a
 per-sender advisory lock, in the same transaction as the reply's `outbound_messages` rows.
 
+- After more than `fresh_start_after_hours` (config/assignment_settings.yaml) without a message from
+  the participant, a non-idle state goes back to `idle`: the active session is paused and its
+  unanswered prompts expire. A voice note swiped onto a prompt that hasn't expired is the exception.
+- If a reply is never delivered (`outbound_messages.status` `failed` or `skipped_window`), the state
+  goes back to what it was before that turn (`outbound_messages.state_snapshot`), under the same
+  lock, unless a later turn has changed it since. Recordings and answers are kept.
+
 | Column | Type | Notes |
 |---|---|---|
 | `participant_id` | FK → participants, PK | |
 | `state` | text | `idle`, `awaiting_ready`, `in_session`, `awaiting_continue`, `awaiting_stop_confirm` |
-| `context` | JSONB | e.g. `offered_task_type`, `previous_state` (to return to after a cancelled STOP), `welcomed`, `instructions_seen` (`general`, `sentence`, `image`, `conversation_starter`), `session_id` |
+| `context` | JSONB | e.g. `offered_task_type`, `previous_state` (to return to after a cancelled STOP), `welcomed`, `instructions_seen` (`general` and one per task type), `session_id` |
 | `updated_at` | timestamptz | |
 
 ### outbound_messages
@@ -204,10 +219,13 @@ recipient's number isn't stored here; it comes from the inbound message being an
 | `message_keys` | JSONB | Catalog keys used, with variant indexes: `[{"key": "prompt.image_caption", "variant": 2}, …]` |
 | `body` | text | Exactly what was sent (or the image caption) |
 | `media_prompt_id` | FK → prompts, nullable | Image prompts: sent as media via a signed `/media/prompts/{token}` URL |
-| `assignment_id` | FK → assignments, nullable | The prompt this message carries; marked sent with the Twilio SID |
-| `status` | text | `pending` → `sent` → `delivered` → `read`, or `failed` (from Twilio status callbacks, `POST /whatsapp/status`) |
-| `twilio_sid` | text, unique | |
-| `error`, `error_code` | text, int, nullable | Twilio's error, e.g. 63019 when it couldn't fetch an image |
+| `assignment_id` | FK → assignments, nullable | The prompt this message carries; marked sent with the provider message ID |
+| `status` | text | `pending` → `sent` → `delivered` → `read`, or `failed` (Twilio: status callbacks to `POST /whatsapp/status`; Meta: `statuses` in `POST /webhooks/meta`), or `skipped_window`: not sent because the participant's last message on this channel is older than `reply_window_hours` (default 23.5), or refused for that reason (Meta 131047, Twilio 63016). Neither `failed` nor `skipped_window` is retried once set, and the rest of the same reply gets the same status |
+| `channel` | text | `twilio` or `meta`: the channel of the inbound message being answered, and the one it is sent on |
+| `provider_message_id` | text, nullable | Twilio SID or Meta wamid once sent. Unique with `channel` |
+| `error`, `error_code` | text, int, nullable | The provider's error, e.g. Twilio 63019 when it couldn't fetch an image, Meta 131047 outside the 24-hour window |
+| `error_details` | JSONB, nullable | The provider's error fields: Meta `code`, `subcode`, `type`, `title`, `message`, `details`, `fbtrace_id`, `http_status`; Twilio `code`, `message`, `http_status`. URLs and phone numbers are replaced; never tokens or message text |
+| `state_snapshot` | JSONB, nullable | `{"before": {"state", "context"}, "after": {...}}` for the turn that wrote this reply; used to roll the conversation back if the reply isn't delivered. Null for unregistered senders |
 | `created_at`, `sent_at`, `status_updated_at` | timestamptz | |
 
 ## Planned tables

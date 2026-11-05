@@ -10,6 +10,11 @@ Coverage of a prompt = its assignments that are accepted, recorded, or sent
 and not yet expired. A prompt is available to a participant while its
 coverage is below speakers_per_prompt for its type and that participant has
 never had it before. Rejected, expired and skipped assignments free the slot.
+
+Unprompted task types (free_speech) have no prompts and no coverage: each
+position in their sessions is an assignment with no prompt_id, an invitation
+to talk about anything. Everything else (session size, expiry, retakes,
+answers, minutes and targets) works the same for every type.
 """
 
 from dataclasses import dataclass
@@ -18,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import ColumnElement, and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from src.storage.models import Assignment, Participant, Prompt, Recording, TaskSession
+from src.storage.models import Assignment, OutboundMessage, Participant, Prompt, Recording, TaskSession
 from src.tasks.config import CollectionConfig, get_collection_config
 
 # Assignments that hold a slot regardless of time ("sent" holds one until it expires).
@@ -90,8 +95,8 @@ def _available(participant_id: str, task_type: str, limit: int, now: datetime) -
 
 
 def _limit(task_type: str, config: CollectionConfig) -> int:
-    if task_type not in config.speakers_per_prompt:
-        raise ValueError(f"Unknown task type {task_type!r}; configured: {config.task_types}")
+    if not config.is_prompted(task_type):  # also raises for an unknown type
+        raise ValueError(f"{task_type!r} is unprompted: it has no prompts to choose")
     return config.speakers_per_prompt[task_type]
 
 
@@ -103,6 +108,8 @@ def has_available_prompt(
     config: CollectionConfig | None = None,
 ) -> bool:
     config = config or get_collection_config()
+    if not config.is_prompted(task_type):
+        return True  # an invitation to talk is always available
     now = now or utcnow()
     filters = _available(participant_id, task_type, _limit(task_type, config), now)
     return db.scalar(select(exists().where(*filters))) is True
@@ -198,8 +205,8 @@ def choose_task_type(
     Types whose target is met, or with no prompt available to this
     participant, are skipped. None only when every type's target is met, no
     prompts are available for the unmet ones, or the participant isn't
-    active. The total target isn't a stopping rule (the total can end above
-    it); it's kept for reporting.
+    active. Targets are per type (config.targets_for); the total is only
+    their sum, so a participant is done when every type is.
     """
     config = config or get_collection_config()
     now = now or utcnow()
@@ -242,7 +249,7 @@ def start_session(
     config: CollectionConfig | None = None,
 ) -> TaskSession:
     config = config or get_collection_config()
-    _limit(task_type, config)
+    config.task_type(task_type)  # raises for an unknown type
     if get_active_session(db, participant_id) is not None:
         raise ActiveSessionError(f"{participant_id} already has an active session")
     task_session = TaskSession(
@@ -310,6 +317,37 @@ def create_assignment(
     return assignment
 
 
+def create_invitation(
+    db: Session,
+    task_session: TaskSession,
+    position: int,
+    now: datetime | None = None,
+    config: CollectionConfig | None = None,
+) -> Assignment:
+    """An assignment with no prompt, for an unprompted task type (free_speech)."""
+    config = config or get_collection_config()
+    now = now or utcnow()
+    if task_session.status != "active":
+        raise TaskBankError("the session isn't active")
+    if config.is_prompted(task_session.task_type):
+        raise TaskBankError(f"{task_session.task_type} is prompted: use create_assignment")
+    if not 1 <= position <= task_session.size:
+        raise ValueError(f"position must be between 1 and {task_session.size}")
+    assignment = Assignment(
+        participant_id=task_session.participant_id,
+        prompt_id=None,
+        prompt_type=task_session.task_type,
+        session_id=task_session.id,
+        position=position,
+        status="sent",
+        retake_count=0,
+        expires_at=now + timedelta(hours=config.assignment_expiry_hours),
+    )
+    db.add(assignment)
+    db.flush()
+    return assignment
+
+
 def next_position(db: Session, task_session: TaskSession) -> int | None:
     """The next free position in the session, or None if it's full."""
     used = db.scalar(select(func.count(Assignment.id)).where(Assignment.session_id == task_session.id))
@@ -322,13 +360,17 @@ def assign_next_prompt(
     now: datetime | None = None,
     config: CollectionConfig | None = None,
 ) -> Assignment | None:
-    """choose_next_prompt + create_assignment for the session's next position.
+    """choose_next_prompt + create_assignment for the session's next position
+    (an invitation, with no prompt, for unprompted types).
 
     None if the session is full or no prompt is available.
     """
+    config = config or get_collection_config()
     position = next_position(db, task_session)
     if position is None:
         return None
+    if not config.is_prompted(task_session.task_type):
+        return create_invitation(db, task_session, position, now, config)
     prompt = choose_next_prompt(db, task_session.participant_id, task_session.task_type, now, config)
     if prompt is None:
         return None
@@ -358,21 +400,36 @@ def mark_sent(
 
 
 def find_open_assignment(
-    db: Session, participant_id: str, replied_to_message_sid: str | None = None
+    db: Session,
+    participant_id: str,
+    replied_to_message_sid: str | None = None,
+    channel: str | None = None,
 ) -> Assignment | None:
     """The assignment an incoming answer belongs to.
 
     A WhatsApp reply to a prompt message binds to that prompt's assignment
-    (even an older one, whatever its status). Otherwise: the most recently
-    sent, still open assignment in the participant's active session.
+    (even an older one, whatever its status). With a channel, only a prompt
+    sent on that channel matches (outbound_messages.provider_message_id), so
+    a reply on one number never binds to a prompt sent from the other.
+    Otherwise: the most recently sent, still open assignment in the
+    participant's active session.
     """
     if replied_to_message_sid:
-        assignment = db.scalar(
-            select(Assignment).where(
-                Assignment.participant_id == participant_id,
-                Assignment.outbound_message_sid == replied_to_message_sid,
-            )
+        query = select(Assignment).where(
+            Assignment.participant_id == participant_id,
+            Assignment.outbound_message_sid == replied_to_message_sid,
         )
+        if channel is not None:
+            query = query.where(
+                select(OutboundMessage.id)
+                .where(
+                    OutboundMessage.assignment_id == Assignment.id,
+                    OutboundMessage.channel == channel,
+                    OutboundMessage.provider_message_id == replied_to_message_sid,
+                )
+                .exists()
+            )
+        assignment = db.scalar(query)
         if assignment is not None:
             return assignment
     task_session = get_active_session(db, participant_id)
@@ -474,10 +531,11 @@ def handle_response(
 def record_failed_attempt(
     db: Session, assignment_id: int, recording_id: int, reason: str
 ) -> Recording:
-    """A clip sent for this assignment that can't be used (too_short, too_long, empty).
+    """A clip sent for this assignment that can't be used (too_short, too_long,
+    empty, or not_recorded: forwarded).
 
-    It's linked to the assignment, so it isn't free speech, and rejected, so it
-    never counts toward minutes. assignment.recording_id keeps pointing at the
+    It's linked to the assignment, so it isn't an unassigned recording, and
+    rejected, so it never counts toward minutes. assignment.recording_id keeps pointing at the
     newest clip that wasn't rejected (if any).
     """
     assignment = db.get(Assignment, assignment_id, with_for_update=True)

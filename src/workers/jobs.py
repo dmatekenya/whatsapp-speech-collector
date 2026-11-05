@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from src.audio.convert import probe, to_wav
-from src.channels.base import ChannelAdapter, MediaDeleteError
+from src.channels.base import TWILIO, ChannelAdapter, MediaDeleteError, audio_origin
 from src.channels.base import InboundMessage as ChannelMessage
 from src.channels.factory import get_channel
 from src.config import get_settings
@@ -20,6 +20,7 @@ from src.logging_config import mask_phone, setup_logging
 from src.registry.participants import find_active_participant
 from src.storage.audio import (
     AudioStorage,
+    apply_audio_origin,
     extension_for,
     get_audio_storage,
     recording_filename,
@@ -29,9 +30,13 @@ from src.storage.db import get_sync_sessionmaker
 from src.storage.duplicates import relink_duplicates
 from src.storage.models import InboundMessage, Recording
 from src.storage.queue import get_inbound_queue
+from src.tasks.config import get_collection_config
 
 setup_logging()
 logger = logging.getLogger(__name__)
+# The worker imports this module when it starts: fail then, with a clear
+# message, if config/assignment_settings.yaml is invalid.
+get_collection_config()
 
 AUDIO = "audio"
 DELETE_MEDIA_JOB = "src.workers.jobs.delete_channel_media"
@@ -82,7 +87,8 @@ def _store_recording(
     try:
         data = channel.download_media(inbound)
         # Hash the original as received (not the WAV) to spot forwarded or
-        # re-sent voice notes; Twilio doesn't pass WhatsApp's forwarded flag.
+        # re-sent voice notes; Twilio doesn't pass WhatsApp's forwarded flag
+        # (Meta does: see recording.forwarded).
         content_sha256 = hashlib.sha256(data).hexdigest()
         # Convert in a scratch directory first, so storage only ever receives
         # finished files (works the same once storage is Spaces).
@@ -114,6 +120,10 @@ def _store_recording(
     recording.channels = info.channels
     recording.size_bytes = wav_size
     recording.content_sha256 = content_sha256
+    # Meta only; None for Twilio, which doesn't say.
+    recording.is_voice_note = inbound.is_voice_note
+    recording.forwarded = inbound.forwarded
+    apply_audio_origin(recording, audio_origin(inbound))
     recording.status = "stored"
     recording.error = None
     session.flush()
@@ -139,7 +149,15 @@ def _store_recording(
     )
 
 
+def parse_stored(message: InboundMessage) -> ChannelMessage:
+    """The stored message, parsed by the adapter of the channel it arrived on."""
+    return get_channel(message.channel).parse_inbound(message.raw_payload or {})
+
+
 def has_media(message: InboundMessage) -> bool:
+    if message.channel != TWILIO:
+        inbound = parse_stored(message)
+        return bool(inbound.media_id or inbound.media_url)
     payload = message.raw_payload or {}
     return bool(payload.get("MediaUrl0")) or payload.get("NumMedia", "0") not in ("", "0")
 
@@ -163,7 +181,7 @@ def record_media_deleted(
 ) -> None:
     message.media_deleted_at = datetime.now(UTC)
     if recording is not None:
-        recording.twilio_media_deleted = True
+        recording.provider_media_deleted = True
     session.commit()
 
 
@@ -192,13 +210,16 @@ def _delete_channel_media(
 
     Only called once the audio is safely stored, or for senders who aren't
     registered (nothing is ever downloaded for them). If the channel refuses,
-    a retry job (delete_channel_media) is scheduled.
+    a retry job (delete_channel_media) is scheduled. Twilio only: Meta keeps
+    received media for a limited time and has nothing to delete.
     """
+    if message.channel != TWILIO:
+        return
     label = f"recording id={recording.id}" if recording is not None else f"message id={message.id}"
     if not get_settings().twilio_delete_media:
         logger.info("Channel media deletion is off (TWILIO_DELETE_MEDIA); keeping media for %s", label)
         return
-    if message.media_deleted_at is not None or (recording is not None and recording.twilio_media_deleted):
+    if message.media_deleted_at is not None or (recording is not None and recording.provider_media_deleted):
         return
     if _try_delete_media(channel, inbound, label):
         record_media_deleted(session, message, recording)
@@ -208,7 +229,7 @@ def _delete_channel_media(
 
 
 def _process_audio(session: Session, message: InboundMessage) -> None:
-    channel = get_channel()
+    channel = get_channel(message.channel)
     inbound = channel.parse_inbound(message.raw_payload)
 
     # One recording per message: create it or reuse the existing row. Commit
@@ -281,7 +302,7 @@ def process_inbound(message_sid: str) -> None:
                 )
                 if has_media(message):
                     # Never downloaded; delete it from the channel straight away.
-                    channel = get_channel()
+                    channel = get_channel(message.channel)
                     inbound = channel.parse_inbound(message.raw_payload)
                     _delete_channel_media(session, message, None, inbound, channel)
                 _reply(message.message_sid)
@@ -334,7 +355,7 @@ def delete_channel_media(message_sid: str) -> None:
         )
         if message is None:
             raise LookupError(f"Inbound message {message_sid} not found")
-        if message.media_deleted_at is not None:
+        if message.media_deleted_at is not None or message.channel != TWILIO:
             return
         recording = session.scalar(
             select(Recording).where(Recording.inbound_message_id == message.id)
@@ -346,7 +367,7 @@ def delete_channel_media(message_sid: str) -> None:
             )
             return
         label = f"recording id={recording.id}" if stored else f"message id={message.id}"
-        channel = get_channel()
+        channel = get_channel(message.channel)
         if not _try_delete_media(channel, channel.parse_inbound(message.raw_payload), label):
             raise MediaDeleteError(f"Channel media for {label} not deleted yet; RQ will retry")
         record_media_deleted(session, message, recording if stored else None)

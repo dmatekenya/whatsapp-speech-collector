@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.storage import db
-from src.storage.models import Assignment, InboundMessage, Participant, Prompt, Recording
+from src.storage.models import Assignment, InboundMessage, OutboundMessage, Participant, Prompt, Recording
 from src.tasks.bank import (
     ActiveSessionError,
     RetakeLimitError,
@@ -33,15 +33,31 @@ from tests.conftest import add_participant
 T0 = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
 
 
+def prompted(**speakers: int) -> dict:
+    """task_types for prompted types with these speakers_per_prompt."""
+    return {
+        t: {"prompted": True, "speakers_per_prompt": n, "speech_type": "scripted" if t == "sentence" else "spontaneous"}
+        for t, n in speakers.items()
+    }
+
+
+def targets(**minutes: float) -> dict:
+    """targets_minutes giving exactly these per-type minutes (split = each type's share)."""
+    total = sum(minutes.values())
+    return {"per_participant": total, "split": {t: m / total for t, m in minutes.items()}}
+
+
 def config(**overrides: object) -> CollectionConfig:
     values = {
-        "speakers_per_prompt": {"sentence": 2, "image": 2, "conversation_starter": 2},
+        "task_types": prompted(sentence=2, image=2, conversation_starter=2),
         "session_size": 10,
         "assignment_expiry_hours": 24,
         "max_retakes_per_prompt": 2,
-        "targets_minutes": {"total": 10, "sentence": 4, "image": 3, "conversation_starter": 3},
+        "targets_minutes": {"per_participant": 10, "split": {"sentence": 0.4, "image": 0.3, "conversation_starter": 0.3}},
         "clip_seconds": {"min": 5, "max": 30},
     }
+    if "speakers_per_prompt" in overrides:  # shorthand: prompted types with these speakers
+        values["task_types"] = prompted(**overrides.pop("speakers_per_prompt"))
     values.update(overrides)
     return CollectionConfig.model_validate(values)
 
@@ -296,6 +312,29 @@ def test_reply_to_binding_picks_the_right_assignment(dbs: Session) -> None:
     assert find_open_assignment(dbs, p1, "SM_prompt_1").id == second.id
 
 
+def test_reply_binding_only_matches_prompts_sent_on_the_same_channel(dbs: Session) -> None:
+    (p1,) = people("P0001")
+    add_prompts(dbs, "sentence", 3)
+    cfg = config()
+    task_session = start_session(dbs, p1, "sentence", T0, cfg)
+    sent = [("twilio", "SM_first"), ("meta", "wamid.SECOND"), ("meta", "wamid.THIRD")]
+    assignments = []
+    for minute, (channel, message_id) in enumerate(sent):
+        a = assign_next_prompt(dbs, task_session, T0, cfg)
+        mark_sent(dbs, a.id, message_id, T0 + timedelta(minutes=minute), cfg)
+        dbs.add(OutboundMessage(purpose=f"reply{minute}", body="x", status="sent", channel=channel,
+                                provider_message_id=message_id, assignment_id=a.id))  # fmt: skip
+        assignments.append(a)
+    dbs.commit()
+    first, second, third = assignments
+
+    assert find_open_assignment(dbs, p1, "SM_first", "twilio").id == first.id
+    assert find_open_assignment(dbs, p1, "wamid.SECOND", "meta").id == second.id
+    # A reply on the other channel never binds; the latest open prompt is used.
+    assert find_open_assignment(dbs, p1, "SM_first", "meta").id == third.id
+    assert find_open_assignment(dbs, p1, "wamid.SECOND", "twilio").id == third.id
+
+
 def test_record_response_links_both_ways_and_retakes(dbs: Session) -> None:
     (p1,) = people("P0001")
     add_prompts(dbs, "sentence", 1)
@@ -335,7 +374,7 @@ def test_minutes_recorded_excludes_duplicates_rejected_and_old_takes(dbs: Sessio
     dbs.commit()
     recording(dbs, p1, 300)  # free speech: no assignment
 
-    assert minutes_recorded(dbs, p1) == {"sentence": 2.5, "image": 0.0, "conversation_starter": 0.0}
+    assert minutes_recorded(dbs, p1) == {"sentence": 2.5, "image": 0.0, "conversation_starter": 0.0, "free_speech": 0.0}
 
 
 # ====================
@@ -376,22 +415,22 @@ def test_choose_task_type_skips_exhausted_types_and_stops_at_targets(dbs: Sessio
     assert choose_task_type(dbs, p1, T0, cfg) is None  # nothing left that's available
 
 
-def test_total_target_is_not_a_stopping_rule(dbs: Session) -> None:
+def test_every_type_target_must_be_met(dbs: Session) -> None:
     (p1,) = people("P0001")
     for task_type in ("sentence", "image", "conversation_starter"):
         add_prompts(dbs, task_type, 5)
     cfg = config(
         speakers_per_prompt={"sentence": 5, "image": 5, "conversation_starter": 5},
-        targets_minutes={"total": 2, "sentence": 4, "image": 1, "conversation_starter": 1},
+        targets_minutes=targets(sentence=4, image=1, conversation_starter=1),
     )
     _record_minutes(dbs, p1, "sentence", 3, cfg)
-    # 3 of 2 total minutes, but every type is still short: keep going.
+    # 3 minutes of sentences, but every type is still short: keep going.
     assert choose_task_type(dbs, p1, T0, cfg) == "image"
     _record_minutes(dbs, p1, "image", 1, cfg)
     _record_minutes(dbs, p1, "conversation_starter", 1, cfg)
     assert choose_task_type(dbs, p1, T0, cfg) == "sentence"
     _record_minutes(dbs, p1, "sentence", 1.5, cfg)
-    # Every type met (total 6.5 of 2): now it stops.
+    # Every type met (6.5 minutes against a total of 6): now it stops.
     assert choose_task_type(dbs, p1, T0, cfg) is None
     assert sum(minutes_recorded(dbs, p1).values()) == 6.5
 
@@ -435,7 +474,7 @@ def test_session_ends_early_when_type_target_met(dbs: Session) -> None:
         add_prompts(dbs, task_type, 10)
     cfg = config(
         speakers_per_prompt={"sentence": 5, "image": 5, "conversation_starter": 5},
-        targets_minutes={"total": 10, "sentence": 1, "image": 2, "conversation_starter": 0.5},
+        targets_minutes=targets(sentence=1, image=2, conversation_starter=0.5),
     )
     task_session = _session_with_prompts(dbs, p1, "sentence", cfg)
 
@@ -462,7 +501,7 @@ def test_session_ends_early_when_type_target_met(dbs: Session) -> None:
 def test_early_end_returns_none_when_everything_is_met(dbs: Session) -> None:
     (p1,) = people("P0001")
     add_prompts(dbs, "sentence", 3)
-    cfg = config(targets_minutes={"total": 10, "sentence": 0.5, "image": 0, "conversation_starter": 0})
+    cfg = config(targets_minutes=targets(sentence=0.5, image=0, conversation_starter=0))
     task_session = _session_with_prompts(dbs, p1, "sentence", cfg)
     a = _send(dbs, task_session, cfg)
 
@@ -475,7 +514,7 @@ def test_early_end_returns_none_when_everything_is_met(dbs: Session) -> None:
 def test_session_runs_on_while_target_not_met(dbs: Session) -> None:
     (p1,) = people("P0001")
     add_prompts(dbs, "sentence", 5)
-    cfg = config(session_size=3, targets_minutes={"total": 10, "sentence": 4, "image": 1, "conversation_starter": 1})
+    cfg = config(session_size=3, targets_minutes=targets(sentence=4, image=1, conversation_starter=1))
     task_session = _session_with_prompts(dbs, p1, "sentence", cfg)
 
     for _ in range(3):
@@ -491,7 +530,7 @@ def test_late_answer_to_an_ended_session_does_not_end_anything(dbs: Session) -> 
     (p1,) = people("P0001")
     add_prompts(dbs, "sentence", 5)
     add_prompts(dbs, "image", 5)
-    cfg = config(targets_minutes={"total": 10, "sentence": 0.5, "image": 1, "conversation_starter": 0})
+    cfg = config(targets_minutes=targets(sentence=0.5, image=1, conversation_starter=0))
     task_session = _session_with_prompts(dbs, p1, "sentence", cfg)
     ignored = _send(dbs, task_session, cfg)
     answered = _send(dbs, task_session, cfg)
@@ -582,7 +621,8 @@ def test_waiting_transaction_recounts_after_lock_released(dbs: Session) -> None:
 
 def test_config_file_loads() -> None:
     real = get_collection_config()
-    assert set(real.speakers_per_prompt) == {"sentence", "image", "conversation_starter"}
+    assert set(real.speakers_per_prompt) == {"sentence", "image", "conversation_starter"}  # prompted only
+    assert list(real.task_types) == ["sentence", "image", "conversation_starter", "free_speech"]
     assert real.targets_for({"targets_minutes": {"image": 9}})["image"] == 9
 
 

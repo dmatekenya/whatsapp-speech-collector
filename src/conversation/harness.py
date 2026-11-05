@@ -18,6 +18,7 @@ from src.channels.twilio import TwilioChannel
 from src.conversation.engine import respond
 from src.conversation.outbound import send_outbound
 from src.storage.db import get_sync_sessionmaker
+from src.storage.audio import apply_audio_origin
 from src.storage.duplicates import relink_duplicates
 from src.storage.models import InboundMessage, OutboundMessage, Participant, Recording
 
@@ -85,12 +86,18 @@ class ChatHarness:
         return self._turn("SM", {"Body": body, "NumMedia": "0"}, "text")
 
     def voice(
-        self, seconds: float, reply: bool = False, duplicate: bool = False, reply_to: str | None = None
+        self,
+        seconds: float,
+        reply: bool = False,
+        duplicate: bool = False,
+        reply_to: str | None = None,
+        origin: str = "unknown",
     ) -> list[Sent]:
+        """A voice note. origin: recorded, forwarded, uploaded or unknown (Twilio)."""
         payload = {"Body": "", "NumMedia": "1", "MediaContentType0": "audio/ogg"}
         if reply_to or (reply and self.last_prompt_sid):
             payload["OriginalRepliedMessageSid"] = reply_to or self.last_prompt_sid
-        return self._turn("MM", payload, "audio", seconds=seconds, duplicate=duplicate)
+        return self._turn("MM", payload, "audio", seconds=seconds, duplicate=duplicate, origin=origin)
 
     def image(self) -> list[Sent]:
         return self._turn("MM", {"Body": "", "NumMedia": "1", "MediaContentType0": "image/jpeg"}, "other")
@@ -101,7 +108,15 @@ class ChatHarness:
     # ======
     # A TURN
     # ======
-    def _store(self, prefix: str, payload: dict[str, str], message_type: str, seconds: float | None, duplicate: bool) -> str:
+    def _store(
+        self,
+        prefix: str,
+        payload: dict[str, str],
+        message_type: str,
+        seconds: float | None,
+        duplicate: bool,
+        origin: str = "unknown",
+    ) -> str:
         sid = f"{prefix}{uuid.uuid4().hex}"
         payload = {"MessageSid": sid, "From": f"whatsapp:{self.phone_number}", **payload}
         if payload.get("NumMedia") == "1":
@@ -122,22 +137,30 @@ class ChatHarness:
             if message_type == "audio" and participant is not None:
                 digest = self.last_audio_hash if (duplicate and self.last_audio_hash) else hashlib.sha256(sid.encode()).hexdigest()
                 self.last_audio_hash = digest
-                db.add(
-                    Recording(
-                        inbound_message_id=message.id,
-                        participant_id=participant.participant_id,
-                        status="stored",
-                        duration_s=seconds,
-                        content_sha256=digest,
-                    )
+                recording = Recording(
+                    inbound_message_id=message.id,
+                    participant_id=participant.participant_id,
+                    status="stored",
+                    duration_s=seconds,
+                    content_sha256=digest,
                 )
+                apply_audio_origin(recording, origin)  # as the worker does
+                db.add(recording)
                 db.flush()
                 relink_duplicates(db, digest)
             db.commit()
         return sid
 
-    def _turn(self, prefix: str, payload: dict[str, str], message_type: str, seconds: float | None = None, duplicate: bool = False) -> list[Sent]:
-        sid = self._store(prefix, payload, message_type, seconds, duplicate)
+    def _turn(
+        self,
+        prefix: str,
+        payload: dict[str, str],
+        message_type: str,
+        seconds: float | None = None,
+        duplicate: bool = False,
+        origin: str = "unknown",
+    ) -> list[Sent]:
+        sid = self._store(prefix, payload, message_type, seconds, duplicate, origin)
         pending = respond(sid, now=self.now)
         if pending:
             send_outbound(pending[0], self.channel, self.now)
@@ -148,10 +171,10 @@ class ChatHarness:
             ).all()
         urls = {sent_sid: url for sent_sid, _, _, url in self.channel.sent}
         sent = [
-            Sent(row.id, row.body, row.media_prompt_id, urls.get(row.twilio_sid), row.twilio_sid or "")
+            Sent(row.id, row.body, row.media_prompt_id, urls.get(row.provider_message_id), row.provider_message_id or "")
             for row in rows
         ]
         for row in rows:
-            if row.assignment_id is not None and row.twilio_sid:
-                self.last_prompt_sid = row.twilio_sid
+            if row.assignment_id is not None and row.provider_message_id:
+                self.last_prompt_sid = row.provider_message_id
         return sent

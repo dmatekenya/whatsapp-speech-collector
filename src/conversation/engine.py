@@ -8,19 +8,40 @@ The send_outbound job then sends them. Re-running a turn whose reply exists
 just returns that reply's pending rows, so a retried job never replies twice.
 
 States: idle | awaiting_ready | in_session | awaiting_continue | awaiting_stop_confirm.
+
+After a gap longer than fresh_start_after_hours since the participant's previous
+message, a non-idle conversation starts afresh: the open session is paused,
+its unanswered prompts expire, and the message gets the welcome-back offer.
+Each reply row keeps the state before and after its turn, so the send job can
+put the conversation back if the reply is never delivered (see outbound.py).
 """
 
+import copy
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import cached_property
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from src.channels.base import InboundMessage as ChannelMessage
+from src.channels.factory import get_channel
 from src.config import get_settings
+from src.conversation.locks import lock_conversation
+from src.conversation.states import (  # noqa: F401 - STATES is re-exported
+    AWAITING_CONTINUE,
+    AWAITING_READY,
+    AWAITING_STOP_CONFIRM,
+    IDLE,
+    IN_SESSION,
+    INITIAL_STATE,
+    STATES,
+    initial_context,
+)
 from src.conversation.messages import Catalog, Rendered, get_catalog
 from src.conversation.outbound import PromptPart, Reply, emit
 from src.logging_config import mask_phone
@@ -48,7 +69,7 @@ from src.tasks.bank import (
     skip_assignment,
     start_session,
 )
-from src.tasks.config import TOTAL, CollectionConfig, get_collection_config
+from src.tasks.config import CollectionConfig, get_collection_config
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +84,11 @@ _MEDIA_PROBLEMS = {"image": "image", "video": "video", "document": "document", "
 # =======
 # HELPERS
 # =======
-def _kind(message: InboundMessage) -> str:
+def _kind(message: InboundMessage, inbound: ChannelMessage) -> str:
     """text | audio | image | video | document | other."""
     if message.message_type in ("text", "audio"):
         return message.message_type
-    content_type = (message.raw_payload or {}).get("MediaContentType0", "") or ""
+    content_type = inbound.media_content_type or ""
     for prefix, kind in (("image/", "image"), ("video/", "video"), ("application/", "document"), ("text/", "document")):
         if content_type.startswith(prefix):
             return kind
@@ -90,14 +111,26 @@ class Turn:
     state: ConversationState
     recording: Recording | None
     now: datetime
+    # When the participant's previous message (any channel) arrived; None if this is their first.
+    previous_inbound_at: datetime | None = None
+
+    @cached_property
+    def inbound(self) -> ChannelMessage:
+        """The stored message, parsed by the adapter of the channel it arrived on."""
+        return get_channel(self.message.channel).parse_inbound(self.message.raw_payload or {})
 
     @property
     def body(self) -> str:
-        return str((self.message.raw_payload or {}).get("Body", "") or "")
+        return self.inbound.text or ""
 
     @property
     def replied_to(self) -> str | None:
-        return (self.message.raw_payload or {}).get("OriginalRepliedMessageSid") or None
+        """The provider message ID of the message this swipe-replies to."""
+        return self.inbound.replied_to_message_id
+
+    @property
+    def channel(self) -> str:
+        return self.message.channel
 
     @property
     def context(self) -> dict[str, Any]:
@@ -128,7 +161,8 @@ class Engine:
         values: dict[str, Any] = {
             "first_name": _first_name(participant),
             "total_done": _minutes(sum(done.values())),
-            "total_target": _minutes(targets.get(TOTAL, sum(targets.get(t, 0) for t in types))),
+            # Always the sum of the per-type targets.
+            "total_target": _minutes(self.config.total(targets)),
             "session_size": self.config.session_size,
             "min_seconds": f"{self.config.clip_seconds.min:g}",
             "max_seconds": f"{self.config.clip_seconds.max:g}",
@@ -141,13 +175,33 @@ class Engine:
         return values
 
     def task_name(self, task_type: str) -> str:
+        """Lowercase, for use mid-sentence ("Next up: *reading sentences*")."""
         return self.catalog.text(f"task_names.{task_type}")
 
+    def task_label(self, task_type: str) -> str:
+        """Capitalised, for lists ("Reading sentences")."""
+        return self.catalog.text(f"task_labels.{task_type}")
+
     def _progress(self, participant: Participant) -> Rendered:
+        """The summary line, then one progress.line per task type (types with
+        nothing to record and nothing recorded are left out)."""
         done = minutes_recorded(self.db, participant.participant_id)
         if sum(done.values()) <= 0:
             return self.r("progress.none_yet")
-        return self.r("progress.summary", **self._values(participant))
+        values = self._values(participant)
+        targets = self.config.targets_for(participant.attributes)
+        header = self.r("progress.summary", **values)
+        lines = [
+            self.r(
+                "progress.line",
+                label=self.task_label(t),
+                done=values[f"{t}_done"],
+                target=values[f"{t}_target"],
+            ).text
+            for t in self.config.task_types
+            if targets.get(t, 0.0) > 0 or done.get(t, 0.0) > 0
+        ]
+        return Rendered(header.key, header.variant, "\n".join([header.text, *lines]))
 
     def _unmet_types(self, participant: Participant) -> list[str]:
         targets = self.config.targets_for(participant.attributes)
@@ -176,6 +230,10 @@ class Engine:
     def _prompt(self, assignment: Assignment) -> PromptPart:
         task_session = self.db.get(TaskSession, assignment.session_id)
         size = task_session.size if task_session else self.config.session_size
+        if not self.config.is_prompted(assignment.prompt_type):
+            # free_speech: an invitation to talk (variants suggest topics).
+            rendered = self.r(f"prompt.{assignment.prompt_type}", n=assignment.position, session_size=size)
+            return PromptPart(assignment, rendered)
         if assignment.prompt_type == "image":
             rendered = self.r("prompt.image_caption", n=assignment.position, session_size=size)
             return PromptPart(assignment, rendered, media_prompt_id=assignment.prompt_id)
@@ -199,6 +257,66 @@ class Engine:
         # context is edited in place, which SQLAlchemy doesn't see on its own.
         flag_modified(turn.state, "context")
 
+    # ===========
+    # FRESH START
+    # ===========
+
+    def _after_a_gap(self, turn: Turn) -> bool:
+        if turn.previous_inbound_at is None:
+            return False
+        received = turn.message.received_at or self.now
+        return received - turn.previous_inbound_at > timedelta(hours=self.config.fresh_start_hours)
+
+    def _swiped_onto_open_prompt(self, turn: Turn, kind: str) -> bool:
+        """A voice note swipe-replying to a prompt that hasn't expired: answered as usual."""
+        if kind != "audio" or not turn.replied_to:
+            return False
+        assignment = find_open_assignment(self.db, turn.participant.participant_id, turn.replied_to, turn.channel)
+        return (
+            assignment is not None
+            and assignment.outbound_message_sid == turn.replied_to
+            and assignment.status in ANSWERABLE_STATUSES
+            and assignment.status != "expired"
+            and assignment.expires_at is not None
+            and assignment.expires_at > self.now
+        )
+
+    def fresh_start(self, turn: Turn) -> None:
+        """Pause the open session, expire its unanswered prompts, back to idle."""
+        participant_id = turn.participant.participant_id
+        active = get_active_session(self.db, participant_id)
+        if active is not None:
+            self.db.execute(
+                update(Assignment)
+                .where(Assignment.session_id == active.id, Assignment.status == "sent")
+                .values(status="expired")
+                .execution_options(synchronize_session="fetch")
+            )
+            end_session(self.db, active.id, "paused", self.now)
+        logger.info(
+            "Fresh start for %s after %.1f h without messages (was %s)",
+            participant_id,
+            ((turn.message.received_at or self.now) - turn.previous_inbound_at).total_seconds() / 3600,
+            turn.state.state,
+        )
+        self._set(turn, IDLE, offered_task_type=None, previous_state=None, session_id=None)
+
+    def _undelivered_prompt(self, participant_id: str) -> Assignment | None:
+        """A prompt in the active session that was never delivered (its send failed)."""
+        task_session = get_active_session(self.db, participant_id)
+        if task_session is None:
+            return None
+        return self.db.scalar(
+            select(Assignment)
+            .where(
+                Assignment.session_id == task_session.id,
+                Assignment.status == "sent",
+                Assignment.sent_at.is_(None),
+            )
+            .order_by(Assignment.position.desc())
+            .limit(1)
+        )
+
     # =====
     # FLOWS
     # =====
@@ -216,12 +334,12 @@ class Engine:
                 reply.add(self._nothing_to_offer(participant))
             else:
                 reply.add(self._progress(participant), self._nothing_to_offer(participant))
-            self._set(turn, "idle", offered_task_type=None)
+            self._set(turn, IDLE, offered_task_type=None)
             return reply
         reply.add(self._progress(participant), self.r(f"today.{task_type}"))
         reply.add(*self._instructions(turn, task_type))
         reply.add(self.r("ready.ask"))
-        self._set(turn, "awaiting_ready", offered_task_type=task_type)
+        self._set(turn, AWAITING_READY, offered_task_type=task_type)
         return reply
 
     def start(self, turn: Turn, task_type: str | None, reply: Reply | None = None) -> Reply:
@@ -238,11 +356,11 @@ class Engine:
         if assignment is None:
             end_session(self.db, task_session.id, "abandoned", self.now)
             reply.add(self._nothing_to_offer(turn.participant))
-            self._set(turn, "idle", offered_task_type=None)
+            self._set(turn, IDLE, offered_task_type=None)
             return reply
         reply.add(*self._instructions(turn, task_type))
         reply.prompt = self._prompt(assignment)
-        self._set(turn, "in_session", offered_task_type=None, session_id=task_session.id)
+        self._set(turn, IN_SESSION, offered_task_type=None, session_id=task_session.id)
         return reply
 
     def next_prompt(self, turn: Turn, reply: Reply, acknowledge: bool = True) -> Reply:
@@ -255,7 +373,7 @@ class Engine:
                 reply.prompt = self._prompt(assignment)
                 if acknowledge:
                     reply.prompt_prefix = self.r("prompt.ack_prefix")
-                self._set(turn, "in_session")
+                self._set(turn, IN_SESSION)
                 return reply
             end_session(self.db, task_session.id, "completed", self.now)
         next_type = choose_task_type(self.db, participant_id, self.now, self.config)
@@ -266,10 +384,10 @@ class Engine:
                     **self._values(turn.participant, next_task_name=self.task_name(next_type)),
                 )
             )
-            self._set(turn, "awaiting_continue", offered_task_type=next_type)
+            self._set(turn, AWAITING_CONTINUE, offered_task_type=next_type)
         else:
             reply.add(self._nothing_to_offer(turn.participant))
-            self._set(turn, "idle", offered_task_type=None)
+            self._set(turn, IDLE, offered_task_type=None)
         return reply
 
     def repeat_prompt(self, turn: Turn, assignment: Assignment, *parts: Rendered) -> Reply:
@@ -280,6 +398,15 @@ class Engine:
     # ==================
     # AUDIO IN A SESSION
     # ==================
+
+    def _origin_rejected(self, turn: Turn) -> bool:
+        """config audio_origin rejects this voice note (e.g. forwarded)."""
+        recording = turn.recording
+        return (
+            recording is not None
+            and recording.status == "stored"
+            and self.config.audio_origin.policy(recording.audio_origin) == "reject"
+        )
 
     def _problem(self, recording: Recording | None) -> str | None:
         duration = recording.duration_s if recording is not None else None
@@ -295,7 +422,7 @@ class Engine:
 
     def audio_in_session(self, turn: Turn) -> Reply:
         participant_id = turn.participant.participant_id
-        assignment = find_open_assignment(self.db, participant_id, turn.replied_to)
+        assignment = find_open_assignment(self.db, participant_id, turn.replied_to, turn.channel)
         if assignment is not None and assignment.status not in ANSWERABLE_STATUSES:
             assignment = find_open_assignment(self.db, participant_id)
         if assignment is None:
@@ -304,6 +431,11 @@ class Engine:
             if stale is not None:
                 end_session(self.db, stale.id, "abandoned", self.now)
             return self.offer(turn)
+
+        if self._origin_rejected(turn):
+            # Forwarded: never used. The prompt stays open, and it doesn't use up a retake.
+            record_failed_attempt(self.db, assignment.id, turn.recording.id, "not_recorded")
+            return self.repeat_prompt(turn, assignment, self.r("problems.not_recorded"))
 
         problem = self._problem(turn.recording)
         values = self._values(
@@ -314,7 +446,7 @@ class Engine:
             return self.repeat_prompt(turn, assignment, self.r("problems.duplicate", **values))
         if problem is not None:
             # A failed attempt at this prompt: linked to it, rejected, never
-            # free speech and never counted.
+            # an unassigned recording and never counted.
             if turn.recording is not None:
                 record_failed_attempt(
                     self.db, assignment.id, turn.recording.id, FAILED_ATTEMPT_REASONS[problem]
@@ -335,9 +467,9 @@ class Engine:
                     task_name=finished,
                     next_task_name=self.task_name(outcome.next_task_type),
                 )
-                self._set(turn, "awaiting_continue", offered_task_type=outcome.next_task_type)
+                self._set(turn, AWAITING_CONTINUE, offered_task_type=outcome.next_task_type)
                 return Reply(parts=[self.r("session.type_target_reached", **key_values)])
-            self._set(turn, "idle", offered_task_type=None)
+            self._set(turn, IDLE, offered_task_type=None)
             return Reply(
                 parts=[self.r("session.type_target_reached_no_next", **self._values(turn.participant, task_name=finished))]
             )
@@ -365,24 +497,30 @@ class Engine:
             task_type = task_session.task_type if task_session else turn.context.get("offered_task_type")
             return Reply(parts=self._instructions(turn, task_type, force=True))
         if self.catalog.matches("stop", body):
-            self._set(turn, "awaiting_stop_confirm", previous_state=turn.state.state)
+            self._set(turn, AWAITING_STOP_CONFIRM, previous_state=turn.state.state)
             return Reply(parts=[self.r("stop.confirm")])
         return None
 
     def handle(self, turn: Turn) -> Reply | None:
-        kind = _kind(turn.message)
-        state = turn.state.state
+        kind = _kind(turn.message, turn.inbound)
         expire_stale_assignments(self.db, self.now)
+        if (
+            turn.state.state != IDLE
+            and self._after_a_gap(turn)
+            and not self._swiped_onto_open_prompt(turn, kind)
+        ):
+            self.fresh_start(turn)
+        state = turn.state.state
 
-        if state == "awaiting_stop_confirm":
+        if state == AWAITING_STOP_CONFIRM:
             if kind == "text" and self.catalog.matches("yes", turn.body):
                 turn.participant.status = "withdrawn"
                 active = get_active_session(self.db, turn.participant.participant_id)
                 if active is not None:
                     end_session(self.db, active.id, "abandoned", self.now)
-                self._set(turn, "idle", previous_state=None, offered_task_type=None)
+                self._set(turn, IDLE, previous_state=None, offered_task_type=None)
                 return Reply(parts=[self.r("stop.done")])
-            self._set(turn, turn.context.get("previous_state") or "idle", previous_state=None)
+            self._set(turn, turn.context.get("previous_state") or IDLE, previous_state=None)
             return Reply(parts=[self.r("stop.cancelled")])
 
         if kind == "text":
@@ -390,25 +528,29 @@ class Engine:
             if command is not None:
                 return command
 
-        if state == "awaiting_ready":
+        if state == AWAITING_READY:
             if kind == "text" and self.catalog.matches("yes", turn.body):
                 return self.start(turn, turn.context.get("offered_task_type"))
             if kind == "text" and self.catalog.matches("later", turn.body):
-                self._set(turn, "idle", offered_task_type=None)
+                self._set(turn, IDLE, offered_task_type=None)
                 return Reply(parts=[self.r("ready.later")])
             if kind == "audio":
-                return Reply(parts=[self.r("ready.ask")])  # kept as free speech
+                return Reply(parts=[self.r("ready.ask")])  # kept as an unassigned recording
             return Reply(parts=[self.r("ready.unclear")])
 
-        if state == "awaiting_continue":
+        if state == AWAITING_CONTINUE:
             if kind == "text" and self.catalog.matches("yes", turn.body):
                 return self.start(turn, turn.context.get("offered_task_type"))
             if kind == "text" and self.catalog.matches("later", turn.body):
-                self._set(turn, "idle", offered_task_type=None)
+                self._set(turn, IDLE, offered_task_type=None)
                 return Reply(parts=[self.r("session.paused")])
             return Reply(parts=[self.r("ready.unclear")])
 
-        if state == "in_session":
+        if state == IN_SESSION:
+            # The last prompt never reached them (its send failed): send it again.
+            undelivered = self._undelivered_prompt(turn.participant.participant_id)
+            if undelivered is not None and find_open_assignment(self.db, turn.participant.participant_id) is None:
+                return self.repeat_prompt(turn, undelivered)
             if kind == "audio":
                 return self.audio_in_session(turn)
             open_assignment = find_open_assignment(self.db, turn.participant.participant_id)
@@ -424,28 +566,39 @@ class Engine:
             problem = f"problems.{_MEDIA_PROBLEMS.get(kind, 'other')}_instead_of_audio"
             return Reply(parts=[self.r(problem, **self._values(turn.participant, duration="0"))])
 
-        # idle: anything starts the conversation (audio is kept as free speech).
+        # idle: anything starts the conversation (audio is kept as an unassigned
+        # recording; a forwarded one is already marked rejected by the worker).
         return self.offer(turn)
 
 
 # ==========
 # ENTRYPOINT
 # ==========
-def _lock(db: Session, sender: str) -> None:
-    """One turn at a time per sender, until this transaction ends."""
-    db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": f"conversation:{sender}"})
-
-
 def _state_for(db: Session, participant_id: str) -> ConversationState:
     db.execute(
         insert(ConversationState)
-        .values(participant_id=participant_id, state="idle", context={})
+        .values(participant_id=participant_id, state=INITIAL_STATE, context=initial_context())
         .on_conflict_do_nothing(index_elements=[ConversationState.participant_id])
     )
     state = db.get(ConversationState, participant_id, with_for_update=True)
     if state.context is None:
         state.context = {}
     return state
+
+
+def _snapshot(state: ConversationState) -> dict[str, Any]:
+    return {"state": state.state, "context": copy.deepcopy(state.context or {})}
+
+
+def _previous_inbound_at(db: Session, message: InboundMessage) -> datetime | None:
+    """When the sender's previous message arrived, on any channel."""
+    return db.scalar(
+        select(func.max(InboundMessage.received_at)).where(
+            InboundMessage.sender == message.sender,
+            InboundMessage.id != message.id,
+            InboundMessage.received_at <= message.received_at,
+        )
+    )
 
 
 def _unregistered_reply(db: Session, message: InboundMessage, catalog: Catalog, now: datetime) -> Reply | None:
@@ -472,11 +625,12 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
     now = now or datetime.now(UTC)
     catalog = get_catalog()
     config = get_collection_config()
+    state_snapshot: dict[str, Any] | None = None
     with get_sync_sessionmaker()() as db:
         message = db.scalar(select(InboundMessage).where(InboundMessage.message_sid == message_sid))
         if message is None:
             raise LookupError(f"Inbound message {message_sid} not found")
-        _lock(db, message.sender)
+        lock_conversation(db, message.sender)
         existing = db.scalars(
             select(OutboundMessage)
             .where(OutboundMessage.inbound_message_id == message.id)
@@ -499,10 +653,12 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
         else:
             recording = db.scalar(select(Recording).where(Recording.inbound_message_id == message.id))
             state = _state_for(db, participant_id)
-            turn = Turn(db, message, participant, state, recording, now)
+            before = _snapshot(state)
+            turn = Turn(db, message, participant, state, recording, now, _previous_inbound_at(db, message))
             engine = Engine(db, catalog, config, now)
             reply = engine.handle(turn)
             engine._commit_context(turn)
+            state_snapshot = {"before": before, "after": _snapshot(state)}
             logger.info(
                 "Turn for %s (message id=%s): state %s",
                 participant_id,
@@ -514,6 +670,7 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
             db.commit()
             logger.info("No reply to message id=%s from %s", message.id, mask_phone(message.sender))
             return []
-        rows = emit(db, reply, message.id, participant_id, now)
+        # Replies go out on the channel the message arrived on.
+        rows = emit(db, reply, message.id, participant_id, now, channel=message.channel, state_snapshot=state_snapshot)
         db.commit()
         return [row.id for row in rows]

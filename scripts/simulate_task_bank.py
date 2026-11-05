@@ -2,6 +2,14 @@
 
     uv run python -m scripts.simulate_task_bank
     uv run python -m scripts.simulate_task_bank --participants 30 --seed 3
+    uv run python -m scripts.simulate_task_bank --per-participant 6
+
+Targets come from config/assignment_settings.yaml (per_participant x split,
+rounded to 0.5 min); --per-participant tries another total with the same split.
+Unprompted types (free_speech) run sessions of invitations, with no prompts
+or coverage; their minutes count toward their own target like any other type.
+Each task type is shown with its speech_type (scripted or spontaneous, from
+the config), and minutes are also summed per speech type.
 
 Runs in one transaction on a throwaway database (speech_collector_test by
 default) that is always rolled back: nothing is kept. Your real prompt bank is
@@ -34,7 +42,7 @@ from src.tasks.bank import (
     set_assignment_outcome,
     start_session,
 )
-from src.tasks.config import TOTAL, CollectionConfig, get_collection_config
+from src.tasks.config import CollectionConfig, get_collection_config
 
 START = datetime(2026, 11, 2, 8, 0, tzinfo=UTC)
 PROMPT_COLUMNS = ("prompt_id", "prompt_type", "text", "normalized_text", "flags", "active", "source_file")
@@ -159,7 +167,8 @@ def _run_session(
 
 def _stop_reason(sim: Session, participant_id: str, config: CollectionConfig) -> str:
     done = minutes_recorded(sim, participant_id)
-    unmet = [t for t in config.task_types if done[t] < config.targets_minutes.get(t, 0)]
+    targets = config.default_targets  # simulated participants have no overrides
+    unmet = [t for t in config.task_types if done[t] < targets[t]]
     return "all type targets met" if not unmet else "no prompts for " + ", ".join(unmet)
 
 
@@ -227,7 +236,17 @@ def report(
 
     lines.append("")
     lines.append("  prompts per coverage level (accepted + recorded + unexpired sent):")
+    lines.append(f"    {'task_type':<21} {'speech_type':<11}")
     for task_type in config.task_types:
+        speech = config.speech_type(task_type)
+        if not config.is_prompted(task_type):
+            invitations = sim.scalar(
+                select(func.count(Assignment.id)).where(Assignment.prompt_type == task_type)
+            )
+            lines.append(
+                f"    {task_type:<21} {speech:<11} unprompted: {invitations} invitations to talk (no prompts, no coverage)"
+            )
+            continue
         limit = config.speakers_per_prompt[task_type]
         levels = by_type.get(task_type, Counter())
         cells = "  ".join(f"{level}:{levels.get(level, 0):>4}" for level in range(limit + 1))
@@ -235,12 +254,14 @@ def report(
         top = max(levels, default=0)
         low = min(levels, default=0)
         lines.append(
-            f"    {task_type:<21} {cells}   min {low} / max {top} (limit {limit}){'  OVER LIMIT: ' + str(over) if over else ''}"
+            f"    {task_type:<21} {speech:<11} {cells}   min {low} / max {top} (limit {limit})"
+            f"{'  OVER LIMIT: ' + str(over) if over else ''}"
         )
 
     repeats = sim.scalar(
         select(func.count()).select_from(
             select(Assignment.participant_id, Assignment.prompt_id)
+            .where(Assignment.prompt_id.is_not(None))  # free_speech invitations have no prompt
             .group_by(Assignment.participant_id, Assignment.prompt_id)
             .having(func.count() > 1)
             .subquery()
@@ -256,13 +277,14 @@ def report(
     lines.append(f"  sessions ended early (type target met): {counter['ended_early']}")
 
     lines.append("")
-    targets = config.targets_minutes
+    targets = config.default_targets  # simulated participants have no overrides
     types = config.task_types
+    split = config.targets_minutes.split
     short = {t: t.replace("conversation_starter", "conversation")[:12] for t in types}
     lines.append(
-        "  minutes recorded vs target ("
-        + ", ".join(f"{t} {targets.get(t, 0):g}" for t in types)
-        + f"; total {targets.get(TOTAL, 0):g}, reported only):"
+        f"  minutes recorded vs target ({config.targets_minutes.per_participant:g} per participant split "
+        + ", ".join(f"{t} ({config.speech_type(t)}) {split[t]:g} = {targets[t]:g}" for t in types)
+        + f"; total {config.total(targets):g}):"
     )
     lines.append(
         f"    {'participant':<11}  "
@@ -273,10 +295,10 @@ def report(
     for participant_id, outcome in outcomes.items():
         done = minutes_recorded(sim, participant_id)
         cells = "  ".join(
-            f"{done[t]:>5.1f}/{targets.get(t, 0):<4g}{'*' if done[t] >= targets.get(t, 0) else ' '}".rjust(12)
+            f"{done[t]:>5.1f}/{targets[t]:<4g}{'*' if done[t] >= targets[t] else ' '}".rjust(12)
             for t in types
         )
-        over = {t: max(0.0, done[t] - targets.get(t, 0)) for t in types}
+        over = {t: max(0.0, done[t] - targets[t]) for t in types}
         for t in types:
             overshoot_all[t].append(over[t])
         over_cells = " / ".join(f"+{over[t]:.1f}" for t in types)
@@ -290,7 +312,37 @@ def report(
         "  mean overshoot: "
         + ", ".join(f"{t} +{sum(v) / len(v):.2f} min (max +{max(v):.2f})" for t, v in overshoot_all.items())
     )
+    lines.extend(_speech_type_summary(sim, outcomes, config, targets))
     return "\n".join(lines)
+
+
+def _speech_type_summary(
+    sim: Session, outcomes: dict[str, Outcome], config: CollectionConfig, targets: dict[str, float]
+) -> list[str]:
+    """Scripted vs spontaneous minutes (speech_type is derived from task_type)."""
+    goal = config.by_speech_type(targets)
+    total_goal = sum(goal.values()) or 1.0
+    lines = [
+        "",
+        "  minutes by speech type (target "
+        + ", ".join(f"{name} {minutes:g} = {minutes / total_goal:.0%}" for name, minutes in goal.items())
+        + "):",
+        f"    {'participant':<11}  " + "  ".join(f"{name:>17}" for name in goal) + "  spontaneous share",
+    ]
+    overall = dict.fromkeys(goal, 0.0)
+    for participant_id in outcomes:
+        done = config.by_speech_type(minutes_recorded(sim, participant_id))
+        for name, minutes in done.items():
+            overall[name] += minutes
+        share = done["spontaneous"] / (sum(done.values()) or 1.0)
+        cells = "  ".join(f"{done[name]:>8.1f}/{goal[name]:<5g}".rjust(17) for name in goal)
+        lines.append(f"    {participant_id:<11}  {cells}  {share:>17.0%}")
+    recorded = sum(overall.values()) or 1.0
+    lines.append(
+        "    all participants: "
+        + ", ".join(f"{name} {minutes:.1f} min ({minutes / recorded:.0%})" for name, minutes in overall.items())
+    )
+    return lines
 
 
 # ===
@@ -301,12 +353,18 @@ def main() -> None:
     parser.add_argument("--participants", type=int, default=10)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--database", default="speech_collector_test", help="throwaway database to use")
+    parser.add_argument("--per-participant", type=float, help="minutes per participant (default: from the config)")
     args = parser.parse_args()
 
     if args.database == get_settings().postgres_db:
         parser.error("refusing to simulate in the real database; use a throwaway one")
     engine = create_engine(_database_url(args.database))
     config = get_collection_config()
+    if args.per_participant is not None:
+        if args.per_participant < 0:
+            parser.error("--per-participant must not be negative")
+        targets = config.targets_minutes.model_copy(update={"per_participant": args.per_participant})
+        config = config.model_copy(update={"targets_minutes": targets})
     rng = random.Random(args.seed)
 
     with engine.connect() as connection:

@@ -31,10 +31,18 @@ keywords:
 # ==========
 # TASK NAMES
 # ==========
+# One entry per task type in config/assignment_settings.yaml. task_names are used mid-sentence
+# ("Next up: *reading sentences*"); task_labels start progress lines ("• Reading sentences: ...").
 task_names:
   sentence: "reading sentences"
   image: "describing pictures"
-  conversation_starter: "talking freely"
+  conversation_starter: "answering questions"
+  free_speech: "talking about anything"
+task_labels:
+  sentence: "Reading sentences"
+  image: "Describing pictures"
+  conversation_starter: "Answering questions"
+  free_speech: "Talking about anything"
 
 # =======
 # WELCOME
@@ -48,11 +56,9 @@ welcome:
 # ========
 progress:
   none_yet: "You haven't recorded anything yet, so let's get started."
-  summary: |
-    So far you have recorded *{total_done}* of {total_target} minutes:
-    • Reading sentences: {sentence_done} of {sentence_target} min
-    • Describing pictures: {image_done} of {image_target} min
-    • Talking freely: {conversation_starter_done} of {conversation_starter_target} min
+  # The summary line, then progress.line once per task type (label from task_labels).
+  summary: "So far you have recorded *{total_done}* of {total_target} minutes:"
+  line: "• {label}: {done} of {target} min"
   target_reached: |
     You've reached your target of {total_target} minutes. Thank you so much for your contribution! 🙏
     We'll contact you if there is more to record.
@@ -63,7 +69,8 @@ progress:
 today:
   sentence: "Today's task is *reading sentences*. I'll send you a sentence, and you read it aloud in a voice note."
   image: "Today's task is *describing pictures*. I'll send you a picture, and you describe what you see in a voice note."
-  conversation_starter: "Today's task is *talking freely*. I'll send you a question, and you answer it in your own words in a voice note."
+  conversation_starter: "Today's task is *answering questions*. I'll send you a question, and you answer it in your own words in a voice note."
+  free_speech: "Today's task is *talking about anything*. Each time I ask, send a voice note about whatever you like."
 
 # ============
 # INSTRUCTIONS
@@ -94,6 +101,14 @@ instructions:
     • Answer in your own words, as if talking to a friend.
     • Speak in Chichewa.
     • Talk for about {min_seconds} to {max_seconds} seconds.
+    • Don't mention private details such as full names, addresses or phone numbers.
+  free_speech: |
+    For each voice note:
+    • Talk about anything you like: your day, your home area, a story, something you enjoy.
+    • Speak naturally in Chichewa, as if talking to a friend.
+    • Talk for about {min_seconds} to {max_seconds} seconds.
+    • Press and hold the microphone button while you speak.
+    • One topic per voice note is fine.
     • Don't mention private details such as full names, addresses or phone numbers.
   reminder: "Reply *INSTRUCTIONS* at any time to see these tips again."
 
@@ -129,6 +144,12 @@ prompt:
     _{text}_
 
     Answer in a voice note.
+  # Variants: each suggests a different topic; one is picked at random per voice note.
+  free_speech:
+    - "Voice note {n} of {session_size}: tell me about anything you like. For example, how your day has been."
+    - "Voice note {n} of {session_size}: tell me about anything you like. For example, the place where you grew up."
+    - "Voice note {n} of {session_size}: tell me about anything you like. For example, a story you have heard or something that happened to you."
+    - "Voice note {n} of {session_size}: tell me about anything you like. For example, a food, game or song you enjoy."
   retake_ack: "✅ Got it. Here it is again:"
 
 # =======
@@ -172,6 +193,7 @@ problems:
   too_quiet: "That recording was very quiet. Please hold the phone a little closer and try again."
   too_loud: "That recording was distorted. Please hold the phone a little further away and try again."
   duplicate: "It looks like you've sent this recording before. Please record a new voice note."
+  not_recorded: "That voice note was forwarded. Please record your answer yourself: press and hold the microphone button instead of forwarding a voice note."
   retake_limit: "Let's move on to the next one."
   processing_error: "Sorry, something went wrong with that recording. Please send it again."
 

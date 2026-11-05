@@ -3,6 +3,8 @@ from functools import lru_cache
 
 from src.config import get_settings
 from src.storage.files import FileStorage, LocalFileStorage
+from src.storage.models import Recording
+from src.tasks.config import get_collection_config
 
 UNASSIGNED_FOLDER = "_unassigned"
 UNASSIGNED_PREFIX = "UNASSIGNED"
@@ -25,9 +27,9 @@ _EXTENSIONS = {
 }
 
 
-# ============================================================
-# Naming
-# ============================================================
+# ======
+# NAMING
+# ======
 def _check_participant_id(participant_id: str) -> str:
     if not _SAFE_ID.match(participant_id) or _PHONE_LIKE.search(participant_id):
         raise ValueError("participant_id is not a safe folder/file name")
@@ -52,9 +54,9 @@ def extension_for(content_type: str | None) -> str:
     return _EXTENSIONS.get(base, "bin")
 
 
-# ============================================================
-# Storage
-# ============================================================
+# =======
+# STORAGE
+# =======
 # The generic implementation lives in src/storage/files.py.
 AudioStorage = FileStorage
 LocalAudioStorage = LocalFileStorage
@@ -63,3 +65,22 @@ LocalAudioStorage = LocalFileStorage
 @lru_cache
 def get_audio_storage() -> AudioStorage:
     return LocalAudioStorage(get_settings().audio_root)
+
+
+# ============
+# AUDIO ORIGIN
+# ============
+def apply_audio_origin(recording: Recording, origin: str) -> None:
+    """Record where a voice note came from, and what config audio_origin says to do with it.
+
+    reject (e.g. forwarded): never used, whatever it was sent for (QC rejected,
+    not_recorded). accept_flagged (e.g. uploaded): used and counted, but marked
+    for a speaker check (QC needs_review, speaker_check_pending). accept: as
+    usual. The conversation engine reads these when it answers.
+    """
+    recording.audio_origin = origin
+    policy = get_collection_config().audio_origin.policy(origin)
+    if policy == "reject":
+        recording.qc_status, recording.qc_reason = "rejected", "not_recorded"
+    elif policy == "accept_flagged":
+        recording.qc_status, recording.qc_reason = "needs_review", "speaker_check_pending"

@@ -10,6 +10,12 @@
 - Postgres 17 and Redis run via Homebrew services; Docker is not available on this machine.
 - Run the app with `uv run`. Migrations with Alembic.
 
+## Methodology
+- docs/methodology.md describes the data collection design. When a change alters anything it
+  describes (targets, session rules, expiry times, clip limits, QC checks or thresholds, what is
+  stored or logged), update the relevant section and add a row to its decision log, and mention it
+  in your report.
+
 ## Conventions
 - Never log full phone numbers or media URLs; use mask_phone.
 - Don't commit or push; I review first.

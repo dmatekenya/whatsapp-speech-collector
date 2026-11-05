@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,6 +35,27 @@ class Settings(BaseSettings):
     twilio_validate_signature: bool = True
     # Off by default so the same messages can be re-processed during development.
     twilio_delete_media: bool = False
+
+    # =======================
+    # META WHATSAPP CLOUD API
+    # =======================
+    # All optional, so a Twilio-only deployment still starts. The webhook
+    # (/webhooks/meta) needs the verify token and app secret; sending and
+    # media downloads need the access token and phone number ID.
+    meta_verify_token: SecretStr | None = None
+    meta_app_secret: SecretStr | None = None
+    meta_access_token: SecretStr | None = None
+    meta_phone_number_id: str = ""
+    meta_waba_id: str = ""
+    meta_graph_version: str = "v23.0"
+
+    # ========
+    # PROVIDER
+    # ========
+    # Replies always go out on the channel the participant wrote to. This is
+    # only the default for messages with no triggering inbound message
+    # (scripts/send_test_image.py, future proactive messages).
+    whatsapp_provider: Literal["twilio", "meta"] = "twilio"
 
     # =====
     # AUDIO

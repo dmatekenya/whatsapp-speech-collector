@@ -26,7 +26,13 @@ ASSIGNMENT_STATUSES = ("sent", "recorded", "accepted", "rejected", "expired", "s
 # "inactive" is kept for rows imported before paused/completed existed.
 PARTICIPANT_STATUSES = ("active", "inactive", "paused", "completed", "withdrawn")
 CONVERSATION_STATES = ("idle", "awaiting_ready", "in_session", "awaiting_continue", "awaiting_stop_confirm")
-OUTBOUND_STATUSES = ("pending", "sent", "failed", "delivered", "read")
+# skipped_window: not sent (or refused) because the participant's last message
+# on that channel is older than WhatsApp's 24-hour window.
+OUTBOUND_STATUSES = ("pending", "sent", "failed", "delivered", "read", "skipped_window")
+CHANNELS = ("twilio", "meta")
+FORWARDED_VALUES = ("no", "forwarded", "frequently_forwarded")
+# Where a voice note came from (from Meta's voice and forwarded flags; Twilio: unknown).
+AUDIO_ORIGINS = ("recorded", "forwarded", "uploaded", "unknown")
 
 
 def _in_check(column: str, values: tuple[str, ...]) -> str:
@@ -146,6 +152,7 @@ class InboundMessage(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     message_sid: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    # Which webhook it arrived on ("twilio" or "meta"); replies go out on the same channel.
     channel: Mapped[str] = mapped_column(Text, nullable=False, server_default="twilio")
     sender: Mapped[str] = mapped_column(Text, nullable=False)  # E.164
     message_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -165,7 +172,7 @@ class InboundMessage(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # When the message's media was deleted from the channel (Twilio): after
+    # When the message's media was deleted from the channel (Twilio only): after
     # it was stored as a recording, or without downloading it for senders
     # who aren't registered. Media can't be downloaded after this.
     media_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -182,6 +189,8 @@ class Recording(Base):
     __table_args__ = (
         CheckConstraint(_in_check("status", RECORDING_STATUSES), name="ck_recordings_status"),
         CheckConstraint(_in_check("qc_status", QC_STATUSES), name="ck_recordings_qc_status"),
+        CheckConstraint(_in_check("forwarded", FORWARDED_VALUES), name="ck_recordings_forwarded"),
+        CheckConstraint(_in_check("audio_origin", AUDIO_ORIGINS), name="ck_recordings_audio_origin"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -193,7 +202,8 @@ class Recording(Base):
         ForeignKey("participants.participant_id", name="fk_recordings_participant_id"),
         index=True,
     )
-    # The prompt this answers; None means free speech (not prompted).
+    # The assignment this answers (a prompt, or a free_speech invitation). None:
+    # an unassigned recording, sent outside a session; kept, never counted.
     assignment_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("assignments.id", name="fk_recordings_assignment_id", use_alter=True),
@@ -213,9 +223,19 @@ class Recording(Base):
     duplicate_of_recording_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("recordings.id", name="fk_recordings_duplicate_of_recording_id")
     )
-    twilio_media_deleted: Mapped[bool] = mapped_column(
+    # Media removed from the provider after safe storage (Twilio only; Meta
+    # keeps received media for a limited time and needs no deletion).
+    provider_media_deleted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=sql_text("false")
     )
+    # Meta only (None for Twilio, which doesn't say): recorded in WhatsApp as
+    # a voice note (True) or an uploaded audio file (False).
+    is_voice_note: Mapped[bool | None] = mapped_column(Boolean)
+    # Meta only: "no", "forwarded" or "frequently_forwarded" (None for Twilio).
+    forwarded: Mapped[str | None] = mapped_column(Text)
+    # recorded | forwarded | uploaded | unknown (from the two above; Twilio: unknown).
+    # config audio_origin decides what happens to each (accept, reject, accept_flagged).
+    audio_origin: Mapped[str] = mapped_column(Text, nullable=False, server_default="unknown")
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     error: Mapped[str | None] = mapped_column(Text)
     # Quality: storage status above says the file is safe; this says whether
@@ -253,7 +273,7 @@ class TaskSession(Base):
     participant_id: Mapped[str] = mapped_column(
         Text, ForeignKey("participants.participant_id"), nullable=False, index=True
     )
-    task_type: Mapped[str] = mapped_column(Text, nullable=False)  # a prompt_type
+    task_type: Mapped[str] = mapped_column(Text, nullable=False)  # a config task type
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     size: Mapped[int] = mapped_column(nullable=False)
     started_at: Mapped[datetime] = mapped_column(
@@ -283,7 +303,8 @@ class Assignment(Base):
     participant_id: Mapped[str] = mapped_column(
         Text, ForeignKey("participants.participant_id"), nullable=False
     )
-    prompt_id: Mapped[str] = mapped_column(Text, ForeignKey("prompts.prompt_id"), nullable=False)
+    # None for unprompted task types (free_speech): an invitation to talk, not a prompt.
+    prompt_id: Mapped[str | None] = mapped_column(Text, ForeignKey("prompts.prompt_id"))
     prompt_type: Mapped[str] = mapped_column(Text, nullable=False)
     session_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sessions.id"), nullable=False)
     position: Mapped[int] = mapped_column(nullable=False)  # 1..session size
@@ -341,6 +362,8 @@ class OutboundMessage(Base):
         CheckConstraint(_in_check("status", OUTBOUND_STATUSES), name="ck_outbound_messages_status"),
         # A retried job can never send the same reply twice.
         UniqueConstraint("inbound_message_id", "purpose", name="uq_outbound_messages_inbound_purpose"),
+        UniqueConstraint("channel", "provider_message_id", name="uq_outbound_messages_channel_provider_message_id"),
+        CheckConstraint(_in_check("channel", CHANNELS), name="ck_outbound_messages_channel"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -363,9 +386,19 @@ class OutboundMessage(Base):
     # The prompt this message carries, so the send job can mark it sent.
     assignment_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("assignments.id"))
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
-    twilio_sid: Mapped[str | None] = mapped_column(Text, unique=True)
+    # The channel it is sent on: the inbound message's channel ("twilio" or "meta").
+    channel: Mapped[str] = mapped_column(Text, nullable=False, server_default="twilio")
+    # The provider's ID once sent: Twilio's SM... or Meta's wamid....
+    provider_message_id: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[int | None]
+    # The provider's error fields: code, title, subcode, fbtrace_id (Meta) or
+    # code (Twilio). Never tokens, phone numbers or message text.
+    error_details: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # The conversation state before and after the turn that wrote this reply:
+    # {"before": {"state", "context"}, "after": {...}}. If the reply isn't
+    # delivered, the state goes back to "before" (unless a later turn moved on).
+    state_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

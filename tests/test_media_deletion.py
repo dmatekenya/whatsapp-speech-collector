@@ -132,7 +132,7 @@ def test_flag_set_when_deletion_succeeds(fake_channel: FakeChannel, deletion_on:
     process_inbound("MM_OK")
 
     message, recording = load("MM_OK")
-    assert recording.status == "stored" and recording.twilio_media_deleted
+    assert recording.status == "stored" and recording.provider_media_deleted
     assert message.media_deleted_at is not None
     assert fake_channel.delete_calls == [("MM_OK", "stored")]
     assert fake_channel.queue.count == 0  # no retry needed
@@ -149,7 +149,7 @@ def test_flag_stays_false_and_warning_logged_when_deletion_fails(
 
     message, recording = load("MM_REFUSED")
     assert message.status == "processed"  # the job itself succeeded: the audio is safe
-    assert recording.status == "stored" and not recording.twilio_media_deleted
+    assert recording.status == "stored" and not recording.provider_media_deleted
     assert message.media_deleted_at is None
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings == [
@@ -168,7 +168,7 @@ def test_flag_stays_false_and_warning_logged_when_deletion_fails(
     fake_channel.delete_error = None
     delete_channel_media("MM_REFUSED")
     message, recording = load("MM_REFUSED")
-    assert recording.twilio_media_deleted and message.media_deleted_at is not None
+    assert recording.provider_media_deleted and message.media_deleted_at is not None
 
 
 def test_nothing_deleted_when_setting_off(
@@ -292,8 +292,8 @@ def test_cleanup_script_dry_run_then_delete(fake_channel: FakeChannel, audio_roo
     a, rec_a = load("MM_A")
     b, rec_b = load("MM_B")
     c, _ = load("MM_C")
-    assert rec_a.twilio_media_deleted and a.media_deleted_at is not None
-    assert not rec_b.twilio_media_deleted and b.media_deleted_at is None
+    assert rec_a.provider_media_deleted and a.media_deleted_at is not None
+    assert not rec_b.provider_media_deleted and b.media_deleted_at is None
     assert c.media_deleted_at is not None
 
     # Re-running only picks up what's left.

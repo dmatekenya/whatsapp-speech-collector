@@ -13,6 +13,7 @@ import string
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
 import yaml
@@ -40,17 +41,18 @@ class Rendered:
         return {"key": self.key, "variant": self.variant}
 
 
-# =============================
+# ============================
 # KEYS AND PLACEHOLDERS IN USE
-# =============================
+# ============================
 def _progress_values(task_types: list[str]) -> set[str]:
     return {"total_done", "total_target"} | {
         f"{task_type}_{part}" for task_type in task_types for part in ("done", "target")
     }
 
 
-def required_keys(task_types: list[str]) -> dict[str, set[str]]:
+def required_keys(task_types: Iterable[str], unprompted: Iterable[str] = ()) -> dict[str, set[str]]:
     """Every key the engine renders, with the placeholders it supplies for it."""
+    task_types, unprompted = list(task_types), set(unprompted)
     durations = {"duration", "min_seconds", "max_seconds"}
     totals = {"first_name", "total_done", "total_target"}
     keys: dict[str, set[str]] = {
@@ -58,6 +60,7 @@ def required_keys(task_types: list[str]) -> dict[str, set[str]]:
         "welcome.returning": {"first_name"},
         "progress.none_yet": set(),
         "progress.summary": _progress_values(task_types),
+        "progress.line": {"label", "done", "target"},
         "progress.target_reached": _progress_values(task_types),
         "instructions.general": set(),
         "instructions.reminder": set(),
@@ -93,10 +96,14 @@ def required_keys(task_types: list[str]) -> dict[str, set[str]]:
         "too_long",
         "duplicate",
         "retake_limit",
+        "not_recorded",
     ):
         keys[f"problems.{problem}"] = durations
     for task_type in task_types:
         keys[f"task_names.{task_type}"] = set()
+        keys[f"task_labels.{task_type}"] = set()
+        if task_type in unprompted:
+            keys[f"prompt.{task_type}"] = {"n", "session_size"}
         keys[f"today.{task_type}"] = set()
         keys[f"instructions.{task_type}"] = durations
     return keys
@@ -156,9 +163,9 @@ class Catalog:
     def matches(self, category: str, text: str) -> bool:
         return normalize_reply(text) in self.keywords.get(category, set())
 
-    def validate(self, task_types: list[str]) -> None:
+    def validate(self, task_types: Iterable[str], unprompted: Iterable[str] = ()) -> None:
         problems = []
-        for key, supplied in required_keys(task_types).items():
+        for key, supplied in required_keys(task_types, unprompted).items():
             try:
                 value = self.raw(key)
             except CatalogError as exc:
@@ -185,5 +192,6 @@ def catalog_path(language: str | None = None) -> Path:
 @lru_cache
 def get_catalog() -> Catalog:
     catalog = Catalog.load(catalog_path())
-    catalog.validate(get_collection_config().task_types)
+    config = get_collection_config()
+    catalog.validate(config.task_types, [t for t in config.task_types if not config.is_prompted(t)])
     return catalog

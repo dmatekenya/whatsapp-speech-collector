@@ -3,11 +3,12 @@
     uv run python -m scripts.delete_channel_media --dry-run
     uv run python -m scripts.delete_channel_media
 
-Covers (a) stored recordings whose media wasn't deleted (twilio_media_deleted
+Covers (a) stored recordings whose media wasn't deleted (provider_media_deleted
 is false), and (b) media from senders who weren't registered, which is never
-downloaded. Each success is recorded (inbound_messages.media_deleted_at, and
-recordings.twilio_media_deleted for (a)); media Twilio no longer has counts
-as deleted. Failures are listed with Twilio's error and can be re-run.
+downloaded. Twilio messages only: Meta keeps received media for a limited
+time and has nothing to delete. Each success is recorded
+(inbound_messages.media_deleted_at, and recordings.provider_media_deleted for
+(a)); media Twilio no longer has counts as deleted. Failures are listed with Twilio's error and can be re-run.
 Deletion can't be undone: run --dry-run first.
 """
 
@@ -19,7 +20,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.channels.base import ChannelAdapter, MediaDeleteError
+from src.channels.base import TWILIO, ChannelAdapter, MediaDeleteError
 from src.channels.factory import get_channel
 from src.config import get_settings
 from src.logging_config import setup_logging
@@ -52,12 +53,20 @@ def find_candidates(session: Session) -> list[Candidate]:
     stored = session.execute(
         select(InboundMessage.id, InboundMessage.message_sid, Recording.id)
         .join(Recording, Recording.inbound_message_id == InboundMessage.id)
-        .where(Recording.status == "stored", Recording.twilio_media_deleted.is_(False))
+        .where(
+            InboundMessage.channel == TWILIO,
+            Recording.status == "stored",
+            Recording.provider_media_deleted.is_(False),
+        )
         .order_by(InboundMessage.id)
     ).all()
     unregistered = session.scalars(
         select(InboundMessage)
-        .where(InboundMessage.status == "unregistered", InboundMessage.media_deleted_at.is_(None))
+        .where(
+            InboundMessage.channel == TWILIO,
+            InboundMessage.status == "unregistered",
+            InboundMessage.media_deleted_at.is_(None),
+        )
         .order_by(InboundMessage.id)
     ).all()
     return [Candidate(m, sid, "stored recording", r) for m, sid, r in stored] + [
@@ -105,7 +114,7 @@ def main() -> None:
     setup_logging()
     if not get_settings().twilio_delete_media:
         logger.warning("TWILIO_DELETE_MEDIA is off; this one-off deletes anyway")
-    result = delete_pending_media(get_sync_sessionmaker(), get_channel(), dry_run=args.dry_run)
+    result = delete_pending_media(get_sync_sessionmaker(), get_channel(TWILIO), dry_run=args.dry_run)
     prefix = "[dry run] would delete" if args.dry_run else "to delete"
     for candidate in result.candidates:
         what = f"recording id={candidate.recording_id}" if candidate.recording_id else "never downloaded"

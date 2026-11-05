@@ -35,9 +35,9 @@ TEXT = {
 }
 
 
-# ============================================================
-# Helpers
-# ============================================================
+# =======
+# HELPERS
+# =======
 def add_message(payload: dict[str, str], message_type: str) -> None:
     with db.get_sync_sessionmaker()() as session:
         session.add(
@@ -72,9 +72,9 @@ def files_under(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*") if p.is_file()) if root.exists() else []
 
 
-# ============================================================
-# Naming
-# ============================================================
+# ======
+# NAMING
+# ======
 def test_recording_filename_and_folder() -> None:
     assert recording_filename(None, 123, "wav") == "UNASSIGNED_R000123.wav"
     assert recording_filename("P0001", 123, ".ogg") == "P0001_R000123.ogg"
@@ -85,9 +85,9 @@ def test_recording_filename_and_folder() -> None:
             resolve_folder(SENDER, unsafe)
 
 
-# ============================================================
-# Worker
-# ============================================================
+# ======
+# WORKER
+# ======
 def test_audio_message_stores_original_and_wav(
     clean_db: None, fake_channel: FakeChannel, audio_root: Path
 ) -> None:
@@ -166,7 +166,7 @@ def test_delete_media_called_once_after_stored_when_enabled(
 
     assert fake_channel.delete_calls == [(VOICE_NOTE["MessageSid"], "stored")]
     _, recording = load(VOICE_NOTE["MessageSid"])
-    assert recording is not None and recording.twilio_media_deleted
+    assert recording is not None and recording.provider_media_deleted
 
 
 def test_delete_media_not_called_when_disabled(clean_db: None, fake_channel: FakeChannel) -> None:
@@ -177,7 +177,7 @@ def test_delete_media_not_called_when_disabled(clean_db: None, fake_channel: Fak
 
     assert fake_channel.delete_calls == []
     _, recording = load(VOICE_NOTE["MessageSid"])
-    assert recording is not None and not recording.twilio_media_deleted
+    assert recording is not None and not recording.provider_media_deleted
 
 
 def test_delete_failure_does_not_fail_job(
@@ -196,7 +196,7 @@ def test_delete_failure_does_not_fail_job(
     message, recording = load(VOICE_NOTE["MessageSid"])
     assert message.status == "processed"
     assert recording is not None and recording.status == "stored"
-    assert not recording.twilio_media_deleted
+    assert not recording.provider_media_deleted
 
 
 def test_failed_download_leaves_no_files_and_marks_failed(
@@ -253,9 +253,9 @@ def test_text_message_creates_no_recording(
     assert files_under(audio_root) == []
 
 
-# ============================================================
-# Conversion
-# ============================================================
+# ==========
+# CONVERSION
+# ==========
 def test_to_wav_raises_clear_error_on_bad_input(tmp_path: Path, opus_bytes: bytes) -> None:
     from src.audio.convert import to_wav
 

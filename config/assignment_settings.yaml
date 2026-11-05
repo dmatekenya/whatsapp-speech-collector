@@ -5,26 +5,61 @@
 # Read by the task bank (src/tasks/config.py: prompt selection, coverage) and the conversation
 # engine (sessions, progress).
 #
-# - speakers_per_prompt: how many different participants should record each prompt, per type.
-#   A prompt stops being assigned once it has this many accepted recordings (pending ones count too).
+# - task_types: the kinds of recording a participant is asked for. Each one is either
+#   - prompted: true, with speakers_per_prompt: the bot sends a prompt from the prompt bank (a
+#     sentence, picture or question). speakers_per_prompt is how many different participants
+#     should record each prompt; a prompt stops being assigned once it has this many accepted
+#     recordings (pending ones count too); or
+#   - prompted: false (no speakers_per_prompt): the bot just invites a voice note on any topic
+#     (free_speech). Each invitation counts as one prompt of the session.
+#   Each type also has a speech_type, used to group them in reports: scripted (read aloud from
+#   a text: sentence) or spontaneous (the participant's own words: everything else). It follows
+#   from the task type and isn't stored per recording.
+#   The names shown to participants are in the message files (task_names, task_labels).
 # - session_size: prompts per session before the bot pauses and asks the participant to continue.
 # - assignment_expiry_hours: unanswered prompts go back to the pool after this long.
 # - max_retakes_per_prompt: re-recordings allowed for one prompt before moving on.
-# - targets_minutes: default recording targets per participant, in total and per task type.
-#   Individual participants can override these in the registry.
+# - targets_minutes: how much each participant records.
+#   - per_participant: minutes in total.
+#   - split: the share of those minutes per task type. It must list exactly the task types in
+#     task_types and add up to 1.0, or the app refuses to start.
+#   Per-type target = per_participant x share, rounded to the nearest 0.5 minute; the total shown
+#   to participants is the sum of the per-type targets. A participant can be given their own in
+#   the registry (participants.attributes.targets_minutes): {per_participant: 6} (split as here),
+#   or explicit per-type minutes, e.g. {sentence: 2, image: 1, conversation_starter: 1}.
 # - clip_seconds: accepted recording length; shorter or longer clips get a retake request.
+# - fresh_start_after_hours: after this long without a message from the participant, their next
+#   message pauses any open session and gets the welcome-back summary (progress, today's task).
+#   A voice note swiped onto a still-unexpired prompt is the exception: it is taken as the answer.
+#   Leave it out to use assignment_expiry_hours.
+# - reply_window_hours: the bot sends nothing to a participant whose last message to that number
+#   is older than this (WhatsApp's 24-hour window, with a margin). Such messages are marked
+#   skipped_window and the conversation waits for their next message.
+# - audio_origin: what to do with a voice note, by where it came from (recordings.audio_origin;
+#   Meta tells us, Twilio doesn't, so Twilio audio is "unknown" and accepted as before):
+#   - accept: used and counted as usual;
+#   - reject: never used (QC rejected, reason not_recorded); the participant is asked to record
+#     it themselves, and an open prompt stays open (it doesn't use up a retake);
+#   - accept_flagged: used and counted, but marked for review (QC needs_review, reason
+#     speaker_check_pending), e.g. an audio file that may not be the participant's own voice.
 #
 # Values are starting points for the pilot. Adjust from pilot data rather than editing code.
-speakers_per_prompt:
-  sentence: 5
-  image: 5
-  conversation_starter: 3
+task_types:
+  sentence:             {prompted: true, speakers_per_prompt: 5, speech_type: scripted}
+  image:                {prompted: true, speakers_per_prompt: 7, speech_type: spontaneous}
+  conversation_starter: {prompted: true, speakers_per_prompt: 3, speech_type: spontaneous}
+  free_speech:          {prompted: false, speech_type: spontaneous}
 session_size: 10              # prompts per session before the bot pauses
 assignment_expiry_hours: 24   # unanswered prompts return to the pool
 max_retakes_per_prompt: 2
 targets_minutes:              # per participant
-  total: 10                   # your test plan: 10 minutes each
-  sentence: 4
-  image: 2
-  conversation_starter: 3
-clip_seconds: {min: 5, max: 30}
+  per_participant: 20
+  # 6 + 5 + 5 + 4 minutes: 30% scripted (sentences), 70% spontaneous (the rest).
+  split: {sentence: 0.30, image: 0.25, conversation_starter: 0.25, free_speech: 0.20}
+clip_seconds: {min: 5, max: 29}
+fresh_start_after_hours: 24   # same as assignment_expiry_hours
+reply_window_hours: 23.5
+audio_origin:
+  recorded: accept              # a voice note recorded in WhatsApp
+  forwarded: reject             # forwarded from another chat: not the participant's recording
+  uploaded: accept_flagged      # an audio file attached from the phone: checked later

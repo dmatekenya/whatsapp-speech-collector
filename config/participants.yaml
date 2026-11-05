@@ -43,3 +43,13 @@ attributes:
   district: {type: text, report_counts: true}
   first_language: {type: text, report_counts: true}
   accent: {type: text, report_counts: true}
+  # The device the participant mainly records on, as told at registration
+  # (WhatsApp and Meta don't say which device a voice note came from).
+  # Optional: leave blank if unknown.
+  primary_device_type:
+    type: choice
+    choices: [phone, tablet, computer]
+    case_insensitive: true
+    report_counts: true
+  primary_device_brand: {type: text, report_counts: true}   # e.g. Tecno, Itel, Samsung, Apple
+  primary_device_model: {type: text, report_counts: true}   # e.g. Spark 10, iPhone 12

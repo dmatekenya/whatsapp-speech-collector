@@ -4,6 +4,7 @@ from redis import Redis
 from rq import Queue, Retry
 
 from src.config import get_settings
+from src.logging_config import mask_message_id
 
 INBOUND_QUEUE = "inbound"
 PROCESS_INBOUND_JOB = "src.workers.jobs.process_inbound"
@@ -20,4 +21,11 @@ def get_inbound_queue() -> Queue:
 
 
 def enqueue_inbound(queue: Queue, message_sid: str) -> None:
-    queue.enqueue(PROCESS_INBOUND_JOB, message_sid, retry=INBOUND_RETRY)
+    # RQ logs the description; the default would show the raw ID, and Meta's
+    # IDs contain the sender's number.
+    queue.enqueue(
+        PROCESS_INBOUND_JOB,
+        message_sid,
+        retry=INBOUND_RETRY,
+        description=f"process_inbound({mask_message_id(message_sid)})",
+    )

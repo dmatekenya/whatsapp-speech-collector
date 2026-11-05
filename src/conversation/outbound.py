@@ -7,30 +7,39 @@ pending, and (inbound_message_id, purpose) is unique, so a retried turn can't
 create a second reply.
 """
 
+import copy
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import lru_cache
+from typing import Any
 
 from redis import Redis
 from rq import Queue, Retry, get_current_job
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
-from src.channels.base import ChannelAdapter, MessageSendError
+from src.channels.base import TWILIO, ChannelAdapter, MessageSendError
 from src.channels.factory import get_channel
 from src.config import get_settings
+from src.conversation.locks import lock_conversation
 from src.conversation.messages import Rendered
+from src.conversation.states import IN_SESSION
 from src.logging_config import mask_phone
 from src.media.urls import MediaUrlError, build_media_url
 from src.storage.db import get_sync_sessionmaker
-from src.storage.models import Assignment, InboundMessage, OutboundMessage
-from src.tasks.bank import AssignmentClosedError, mark_sent
+from src.storage.models import Assignment, ConversationState, InboundMessage, OutboundMessage, TaskSession
+from src.tasks.bank import AssignmentClosedError, end_session, mark_sent
+from src.tasks.config import get_collection_config
 
 logger = logging.getLogger(__name__)
 
 OUTBOUND_QUEUE = "outbound"
 SEND_JOB = "src.conversation.outbound.send_outbound"
+RESTORE_JOB = "src.conversation.outbound.restore_undelivered"
+# Statuses of a reply that never reached the participant.
+NOT_DELIVERED = ("failed", "skipped_window")
 SEND_RETRY = Retry(max=4, interval=[10, 60, 300, 1800])
 # WhatsApp's limit for an image caption.
 CAPTION_LIMIT = 1024
@@ -75,8 +84,11 @@ def emit(
     inbound_message_id: int,
     participant_id: str | None,
     now: datetime | None = None,
+    channel: str = TWILIO,
+    state_snapshot: dict[str, Any] | None = None,
 ) -> list[OutboundMessage]:
-    """Write the reply as outbound_messages rows (normally one).
+    """Write the reply as outbound_messages rows (normally one), to go out on
+    channel: the channel of the inbound message being answered.
 
     An image prompt goes in one message with the text as its caption if that
     fits WhatsApp's caption limit; otherwise the text is sent first, then the
@@ -108,6 +120,8 @@ def emit(
             media_prompt_id=prompt.media_prompt_id if (with_prompt and prompt) else None,
             assignment_id=prompt.assignment.id if (with_prompt and prompt) else None,
             status="pending",
+            channel=channel,
+            state_snapshot=state_snapshot,
             # The turn's time, so rate limits use the same clock as the engine.
             created_at=now or datetime.now(UTC),
         )
@@ -147,7 +161,10 @@ def enqueue_send(outbound_id: int) -> bool:
     return True
 
 
-def status_callback_url() -> str | None:
+def status_callback_url(channel: str = TWILIO) -> str | None:
+    """Where Twilio posts delivery statuses. Meta posts them to its webhook instead."""
+    if channel != TWILIO:
+        return None
     base = get_settings().public_base_url.rstrip("/")
     return f"{base}{STATUS_ROUTE}" if base else None
 
@@ -179,57 +196,130 @@ def _next_in_turn(db: Session, outbound: OutboundMessage) -> OutboundMessage | N
     )
 
 
+def _hours_since_last_message(db: Session, sender: str, channel: str, now: datetime) -> float | None:
+    """Hours since the participant last wrote on this channel (None: never)."""
+    latest = db.scalar(
+        select(func.max(InboundMessage.received_at)).where(
+            InboundMessage.sender == sender, InboundMessage.channel == channel
+        )
+    )
+    return None if latest is None else (now - latest).total_seconds() / 3600
+
+
+def _log_not_sent(outbound: OutboundMessage, status: str, reason: str) -> None:
+    """At WARNING: IDs, channel and the provider's error fields only; never numbers or text."""
+    details = outbound.error_details or {}
+    logger.warning(
+        "Outbound id=%s (%s, %s) for %s not sent [%s]: %s%s",
+        outbound.id,
+        outbound.purpose,
+        outbound.channel,
+        outbound.participant_id or "unregistered sender",
+        status,
+        reason,
+        "".join(f" {key}={details[key]}" for key in ("code", "subcode", "title", "fbtrace_id") if key in details),
+    )
+
+
+def _not_delivered(db: Session, outbound: OutboundMessage, status: str, now: datetime) -> None:
+    """Mark a reply not delivered (failed or skipped_window), with the rest of
+    its turn, and put the conversation back as it was before that turn."""
+    outbound.status = status
+    outbound.status_updated_at = now
+    # The rest of the reply goes out in order or not at all.
+    for later in db.scalars(
+        select(OutboundMessage).where(
+            OutboundMessage.inbound_message_id == outbound.inbound_message_id,
+            OutboundMessage.sequence > outbound.sequence,
+            OutboundMessage.status == "pending",
+        )
+    ):
+        later.status = status
+        later.status_updated_at = now
+        later.error = "Not sent: an earlier message of this reply wasn't sent"
+    restore_conversation(db, outbound)
+
+
 def send_outbound(
     outbound_id: int, channel: ChannelAdapter | None = None, now: datetime | None = None
 ) -> str | None:
-    """Send one pending outbound message; returns the channel's message SID.
+    """Send one pending outbound message; returns the provider's message ID.
 
-    Transient failures raise so RQ retries; a permanent failure (or the last
-    retry) marks the row failed and is logged. The conversation state is
-    never rolled back. The next message in the same turn is queued after this
-    one is sent, so a long text always arrives before its image. Called with
-    a channel (simulator, tests), the rest of the turn is sent straight away.
+    It goes out on the row's channel (that of the inbound message it answers),
+    never a global setting.
+
+    Nothing is sent if the participant's last message on that channel is
+    older than reply_window_hours (WhatsApp's 24-hour window): the row becomes
+    skipped_window, as it does when the provider refuses it for that reason
+    (Meta 131047, Twilio 63016), and it is never retried. Other transient
+    failures raise so RQ retries; a permanent failure (or the last retry)
+    marks the row failed. Either way the provider's error is stored, and the
+    conversation goes back to its state before this turn, so the
+    participant's next message repeats the step.
+
+    The next message in the same turn is queued after this one is sent, so a
+    long text always arrives before its image. Called with a channel
+    (simulator, tests), the rest of the turn is sent straight away.
     """
     direct = channel is not None
-    channel = channel or get_channel()
+    now = now or datetime.now(UTC)
     with get_sync_sessionmaker()() as db:
         outbound = db.get(OutboundMessage, outbound_id, with_for_update=True)
         if outbound is None or outbound.status != "pending":
             return None
         to = _recipient(db, outbound)
+
+        window = get_collection_config().reply_window_hours
+        age = _hours_since_last_message(db, to, outbound.channel, now)
+        if age is None or age > window:
+            outbound.error = (
+                f"Not sent: the participant's last message on this channel was "
+                f"{'never' if age is None else f'{age:.1f} h ago'} (reply window {window:g} h)"
+            )
+            _not_delivered(db, outbound, "skipped_window", now)
+            db.commit()
+            _log_not_sent(outbound, "skipped_window", outbound.error)
+            return None
+
+        adapter = channel or get_channel(outbound.channel)
+        callback = status_callback_url(outbound.channel)
         try:
             if outbound.media_prompt_id:
                 url = build_media_url(outbound.media_prompt_id)
-                sid = channel.send_media(
-                    to, url, caption=outbound.body or None, status_callback=status_callback_url()
-                )
+                sid = adapter.send_media(to, url, caption=outbound.body or None, status_callback=callback)
             else:
-                sid = channel.send_text(to, outbound.body, status_callback=status_callback_url())
+                sid = adapter.send_text(to, outbound.body, status_callback=callback)
         except (MessageSendError, MediaUrlError) as exc:
-            permanent = isinstance(exc, MediaUrlError) or exc.permanent
             outbound.error = str(exc)
             outbound.error_code = getattr(exc, "code", None)
-            if permanent or _last_attempt():
-                outbound.status = "failed"
+            outbound.error_details = getattr(exc, "details", None)
+            if isinstance(exc, MessageSendError) and exc.outside_window:
+                _not_delivered(db, outbound, "skipped_window", now)
                 db.commit()
-                logger.error("Outbound id=%s to %s failed: %s", outbound.id, mask_phone(to), exc)
+                _log_not_sent(outbound, "skipped_window", "outside the 24-hour window (provider refused)")
+                return None
+            if isinstance(exc, MediaUrlError) or exc.permanent or _last_attempt():
+                _not_delivered(db, outbound, "failed", now)
+                db.commit()
+                _log_not_sent(outbound, "failed", str(exc))
                 return None
             db.commit()
             raise
         except Exception as exc:
             if _last_attempt():
-                outbound.status = "failed"
                 outbound.error = type(exc).__name__
+                _not_delivered(db, outbound, "failed", now)
                 db.commit()
-                logger.error("Outbound id=%s to %s failed: %s", outbound.id, mask_phone(to), type(exc).__name__)
+                _log_not_sent(outbound, "failed", type(exc).__name__)
                 return None
             raise
 
-        now = now or datetime.now(UTC)
-        outbound.twilio_sid = sid
+        outbound.provider_message_id = sid
         outbound.status = "sent"
         outbound.sent_at = now
         outbound.error = None
+        outbound.error_code = None
+        outbound.error_details = None
         if outbound.assignment_id is not None:
             try:
                 # The expiry clock and swipe-reply binding start from here.
@@ -237,7 +327,9 @@ def send_outbound(
             except AssignmentClosedError:
                 pass  # e.g. it expired before the send went out
         db.commit()
-        logger.info("Sent outbound id=%s (%s) to %s", outbound.id, outbound.purpose, mask_phone(to))
+        logger.info(
+            "Sent outbound id=%s (%s) via %s to %s", outbound.id, outbound.purpose, outbound.channel, mask_phone(to)
+        )
         following = _next_in_turn(db, outbound)
         following_id = following.id if following else None
 
@@ -247,3 +339,87 @@ def send_outbound(
         else:
             enqueue_send(following_id)
     return sid
+
+
+# ================================
+# ROLLING BACK AN UNDELIVERED TURN
+# ================================
+def restore_conversation(db: Session, outbound: OutboundMessage) -> bool:
+    """Put the conversation back to its state before the turn that wrote this
+    reply, so the participant's next message repeats the step.
+
+    Only if nothing has changed it since (a later turn wins). Recordings,
+    answers and withdrawals are never undone. A prompt of this turn that never
+    went out stays open if the conversation goes back into the session (the
+    next message re-sends it); otherwise it expires, and a session started by
+    this turn is abandoned. Returns True if the state was restored.
+    """
+    snapshot = outbound.state_snapshot
+    if not snapshot or outbound.participant_id is None:
+        return False
+    lock_conversation(db, _recipient(db, outbound))
+    state = db.get(ConversationState, outbound.participant_id, with_for_update=True)
+    if state is None or {"state": state.state, "context": state.context or {}} != snapshot["after"]:
+        logger.info(
+            "Outbound id=%s not delivered; the conversation for %s has moved on, so it is kept",
+            outbound.id,
+            outbound.participant_id,
+        )
+        return False
+
+    before = snapshot["before"]
+    state.state = before["state"]
+    state.context = copy.deepcopy(before["context"])
+    flag_modified(state, "context")
+    if before["state"] != IN_SESSION:
+        _close_undelivered_prompts(db, outbound)
+    db.flush()
+    logger.info(
+        "Outbound id=%s not delivered; the conversation for %s is back to %s",
+        outbound.id,
+        outbound.participant_id,
+        before["state"],
+    )
+    return True
+
+
+def _close_undelivered_prompts(db: Session, outbound: OutboundMessage) -> None:
+    rows = db.scalars(
+        select(OutboundMessage).where(
+            OutboundMessage.inbound_message_id == outbound.inbound_message_id,
+            OutboundMessage.assignment_id.is_not(None),
+        )
+    )
+    for row in rows:
+        assignment = db.get(Assignment, row.assignment_id, with_for_update=True)
+        if assignment is None or assignment.status != "sent" or assignment.sent_at is not None:
+            continue
+        assignment.status = "expired"
+        task_session = db.get(TaskSession, assignment.session_id)
+        # Started by this turn (same clock), and the conversation is no longer in it.
+        if task_session is not None and task_session.status == "active" and task_session.started_at >= outbound.created_at:
+            end_session(db, task_session.id, "abandoned", outbound.created_at)
+
+
+def enqueue_restore(outbound_id: int) -> None:
+    """Queue restore_undelivered for a reply whose delivery failed later (status webhook)."""
+    get_outbound_queue().enqueue(RESTORE_JOB, outbound_id, retry=SEND_RETRY)
+
+
+def restore_undelivered(outbound_id: int) -> None:
+    """Job: a reply was accepted but its delivery failed (Meta statuses, Twilio
+    callbacks). Put the conversation back, as for a failed send, unless part
+    of that reply already reached the participant or a later turn moved on."""
+    with get_sync_sessionmaker()() as db:
+        outbound = db.get(OutboundMessage, outbound_id, with_for_update=True)
+        if outbound is None or outbound.status not in NOT_DELIVERED:
+            return
+        reached = db.scalar(
+            select(func.count(OutboundMessage.id)).where(
+                OutboundMessage.inbound_message_id == outbound.inbound_message_id,
+                OutboundMessage.status.in_(("delivered", "read")),
+            )
+        )
+        if not reached:
+            restore_conversation(db, outbound)
+        db.commit()

@@ -21,9 +21,9 @@ CARO = ["Caro Test", "+1 415 523 8886", "29", "F", "  Blantyre  ", "English", ""
 DAN = ["Dan Mwale", "0888 111 222", "55", "M", "Mzuzu", "Tumbuka", "northern"]
 
 
-# ============================================================
-# Helpers
-# ============================================================
+# =======
+# HELPERS
+# =======
 def write_csv(tmp_path: Path, name: str, rows: list[list[str]], header: list[str] = HEADER) -> Path:
     path = tmp_path / name
     # CRLF like the real exports.
@@ -45,9 +45,9 @@ def participants() -> list[Participant]:
         return list(session.scalars(select(Participant).order_by(Participant.id)))
 
 
-# ============================================================
-# Phone numbers
-# ============================================================
+# =============
+# PHONE NUMBERS
+# =============
 @pytest.mark.parametrize("raw", ["+265 888 72 15 91", "0888721591", "888721591", "+265888721591"])
 def test_malawi_numbers_normalize_to_e164(raw: str) -> None:
     assert normalize_phone(raw, "MW", ["265", "1"]) == "+265888721591"
@@ -73,9 +73,9 @@ def test_invalid_numbers_rejected(raw: str) -> None:
     assert "4155238886" not in str(error.value) and "88872159" not in str(error.value)
 
 
-# ============================================================
-# Import
-# ============================================================
+# ======
+# IMPORT
+# ======
 def test_ids_assigned_with_defaults_and_unique_across_files(clean_db: None, tmp_path: Path) -> None:
     first = run(write_csv(tmp_path, "batch_one.csv", [ALICE, BEN]))
     second = run(write_csv(tmp_path, "batch_two.csv", [CARO, DAN]))
@@ -223,3 +223,43 @@ def test_missing_required_column_is_an_error(clean_db: None, tmp_path: Path) -> 
 
     assert any(i.row == 1 and i.column == "phone_number" for i in report.errors)
     assert participants() == []
+
+
+# ==============
+# PRIMARY DEVICE
+# ==============
+DEVICE_HEADER = [*HEADER, "primary_device_type", "primary_device_brand", "primary_device_model"]
+
+
+def test_primary_device_is_stored_in_attributes(clean_db: None, tmp_path: Path) -> None:
+    rows = [
+        [*ALICE, "phone", "Tecno", "Spark 10"],
+        [*BEN, "TABLET", " Samsung ", "Galaxy  Tab A9"],  # any case; spaces normalised
+        [*CARO, "", "", ""],  # all optional
+    ]
+    report = run(write_csv(tmp_path, "devices.csv", rows, header=DEVICE_HEADER))
+
+    assert report.ok
+    alice, ben, caro = participants()
+    assert alice.attributes["primary_device_type"] == "phone"
+    assert alice.attributes["primary_device_brand"] == "Tecno"
+    assert alice.attributes["primary_device_model"] == "Spark 10"
+    assert ben.attributes["primary_device_type"] == "tablet"
+    assert ben.attributes["primary_device_brand"] == "Samsung"
+    assert ben.attributes["primary_device_model"] == "Galaxy Tab A9"
+    assert not {"primary_device_type", "primary_device_brand", "primary_device_model"} & set(caro.attributes)
+    assert "primary_device_type" in report.render()  # counted per value, to spot typos
+
+
+def test_unknown_device_type_is_an_error(clean_db: None, tmp_path: Path) -> None:
+    report = run(write_csv(tmp_path, "bad_device.csv", [[*ALICE, "laptop", "HP", "Probook"]], header=DEVICE_HEADER))
+
+    assert {(issue.row, issue.column) for issue in report.errors} == {(2, "primary_device_type")}
+    assert "must be one of phone, tablet, computer" in report.render()
+    assert participants() == []
+
+
+def test_example_file_imports_cleanly(clean_db: None) -> None:
+    path = Path(__file__).resolve().parent.parent / "data" / "participants.example.csv"
+    report = run(path, dry_run=True)
+    assert report.ok and report.counts["new"] == 4, report.render()

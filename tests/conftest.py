@@ -11,6 +11,14 @@ os.environ["TWILIO_WHATSAPP_NUMBER"] = "+14155238886"
 os.environ["TWILIO_VALIDATE_SIGNATURE"] = "true"
 os.environ["TWILIO_DELETE_MEDIA"] = "false"
 os.environ["MEDIA_SIGNING_SECRET"] = "test-media-signing-secret"
+# Fake Meta values, so a real META_* in .env never reaches the tests.
+os.environ["WHATSAPP_PROVIDER"] = "twilio"
+os.environ["META_VERIFY_TOKEN"] = "test-verify-token"
+os.environ["META_APP_SECRET"] = "test-app-secret"
+os.environ["META_ACCESS_TOKEN"] = "test-meta-access-token"
+os.environ["META_PHONE_NUMBER_ID"] = "100000000000001"
+os.environ["META_WABA_ID"] = "200000000000002"
+os.environ["META_GRAPH_VERSION"] = "v23.0"
 # Nothing listens here: a test that reaches for the real Redis fails loudly
 # instead of enqueuing jobs that the real worker would run.
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
@@ -47,9 +55,9 @@ REGISTERED_SENDER = "+265991234567"
 from src.storage.queue import INBOUND_QUEUE, get_inbound_queue  # noqa: E402
 
 
-# ============================================================
-# Database
-# ============================================================
+# ========
+# DATABASE
+# ========
 @pytest.fixture(scope="session")
 def test_database() -> Iterator[None]:
     """Migrate the test database, or skip if Postgres isn't reachable."""
@@ -94,9 +102,9 @@ def count_rows() -> int:
         return connection.scalar(text("SELECT count(*) FROM inbound_messages"))
 
 
-# ============================================================
-# Queue and API client
-# ============================================================
+# ====================
+# QUEUE AND API CLIENT
+# ====================
 @pytest.fixture
 def fake_queue() -> Queue:
     return Queue(INBOUND_QUEUE, connection=fakeredis.FakeRedis())
@@ -120,9 +128,9 @@ def client(clean_db: None, fake_queue: Queue) -> Iterator[TestClient]:
     app.dependency_overrides.clear()
 
 
-# ============================================================
-# Audio and fake channel
-# ============================================================
+# ======================
+# AUDIO AND FAKE CHANNEL
+# ======================
 def make_opus(path: Path, frequency: int) -> bytes:
     """A 2-second sine wave as Opus in OGG, like a WhatsApp voice note."""
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
@@ -216,7 +224,7 @@ def fake_channel(
     opus_bytes: bytes, audio_root: Path, registered_sender: str, monkeypatch: pytest.MonkeyPatch
 ) -> FakeChannel:
     channel = FakeChannel(opus_bytes)
-    monkeypatch.setattr("src.workers.jobs.get_channel", lambda: channel)
+    monkeypatch.setattr("src.workers.jobs.get_channel", lambda name=None: channel)
     # Retry jobs go to fakeredis, never the real queue.
     channel.queue = Queue(INBOUND_QUEUE, connection=fakeredis.FakeRedis())
     monkeypatch.setattr("src.workers.jobs.get_inbound_queue", lambda: channel.queue)

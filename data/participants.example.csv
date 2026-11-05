@@ -1,0 +1,5 @@
+name,phone_number,age,sex,district,first_language,accent,is_test,primary_device_type,primary_device_brand,primary_device_model
+Example Person One,+265991000001,34,F,Lilongwe,Chichewa,Central,true,phone,Tecno,Spark 10
+Example Person Two,0881000002,27,M,Blantyre,Chichewa,Southern,true,Phone,Itel,A70
+Example Person Three,+265991000003,45,F,Mzuzu,Tumbuka,Northern,true,tablet,Samsung,Galaxy Tab A9
+Example Person Four,+265991000004,52,M,Zomba,Chichewa,Southern,true,,,

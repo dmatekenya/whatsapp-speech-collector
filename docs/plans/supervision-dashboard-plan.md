@@ -1,16 +1,17 @@
 # Supervision dashboard: plan
 
-Owner: Stewart Chikomola. Reviewer: Dunstan Matekenya. Drafted 2026-11-07.
+Owner: Stewart Chikomola. Reviewer: Dunstan Matekenya. Drafted 2026-11-07; decisions of
+2026-11-07 included (sections 3, 4.4, 6 and 10).
 
 ## 1. Purpose
 
 Supervisors need a web page where they log in, work through the recordings that the automatic
-checks have flagged, listen to each one, and record a decision: **OK**, **re-record**, **reject**
-or **escalate**. They also need to do **random spot checks** on recordings nobody flagged. Every
-decision is saved in the app database with **who** made it and **when**, so the daily report and
-the bot can use it: for example, the next day the system can see that participant X has three
-clips marked for re-recording, and either ask for them again or stop counting those minutes
-towards X's target.
+checks have flagged, listen to each one, and record a decision: **OK**, **reject** (with a
+reason) or **escalate**. They also need to do **random spot checks** on recordings nobody flagged.
+Every decision is saved in the app database with **who** made it and **when**, so the daily
+report and the bot can use it: rejected clips stop counting towards the contributor's minutes, the
+bot keeps giving them new tasks until they reach their target, and the contributor is told exactly
+which clips were removed and why.
 
 ## 2. Where it fits in the system
 
@@ -46,8 +47,11 @@ spot checks ────┘                                                     
 - **Admin (Dunstan, Stewart):** everything a supervisor can do, plus manage supervisor accounts
   and see the full action log.
 - Accounts are created by an admin (CLI script first; an admin page later). No self sign-up.
-- Supervisors see **participant IDs** (P0012), not names or phone numbers, unless Dunstan decides
-  otherwise (open question 1). Every audio playback and every action is logged.
+- Supervisors are the colleagues who manage contributors, so they **see participant names and
+  phone numbers** to follow up. Because of that: personal accounts only (never shared), every
+  audio playback, contact-detail view and action is logged, and the participant consent and
+  privacy notice must say that supervisors may contact them. Dunstan and Stewart are admins
+  (platform); supervisors do the review work.
 
 ## 4. Features
 
@@ -59,8 +63,7 @@ spot checks ────┘                                                     
 ### 4.2 Overview (home page)
 - Open items by reason (wrong sentence, ASR review, low speech, upload check, spot check) and by
   participant; items done today and by whom.
-- Per participant: minutes recorded, minutes accepted, minutes pending review, minutes marked for
-  re-record or rejected.
+- Per participant: minutes recorded, minutes accepted, minutes pending review, minutes rejected.
 
 ### 4.3 Review queue
 - List of open items, filterable by participant, reason, task type and date; sorted by priority
@@ -75,21 +78,32 @@ spot checks ────┘                                                     
 - What the model heard: latest ASR transcript, CER and suggested band (once step 2 exists).
 - Facts: participant, task type, duration, speech seconds, audio origin, arrival-check result,
   time received, earlier actions on this clip.
-- Decision buttons: **OK**, **Re-record**, **Reject**, **Escalate**; optional note (required for
-  Reject and Escalate); reason codes (wrong sentence, unclear, noisy, not Chichewa, cut off,
-  different speaker, other).
-- After saving: move to the next item. Keyboard shortcuts (space = play/pause, 1–4 = decisions)
+- Decision buttons: **OK** (counts), **Reject** (doesn't count), **Escalate** (a person needs to
+  follow up). Reject requires a reason code: wrong sentence, unclear, noisy, not Chichewa, cut
+  off, different speaker, other. Escalate requires a note. Each reason code has a short
+  contributor-facing explanation and tip (Chichewa and English) kept in config, used in the
+  feedback messages (section 6).
+- There is no "re-record" decision: contributors are not asked to record the same prompt again
+  (section 6).
+- A later decision overrides an earlier one (e.g. a supervisor reverses a rejection after
+  following up); the history stays in the log.
+- Contributor contact details (name, phone) shown on the review and participant pages.
+- After saving: move to the next item. Keyboard shortcuts (space = play/pause, 1–3 = decisions)
   make long sessions faster.
 - Must work on a phone (supervisors in the field) and on slow connections.
 
 ### 4.5 Spot checks
 - "Spot check" draws a random recording that passed all checks and hasn't been reviewed, creates a
   `spot_check` item and opens it on the review page.
-- Sampling should be fair: e.g. per participant and per task type, with a configurable target
-  (e.g. 5% of each participant's accepted clips). Settings in `config/supervision.yaml`.
+- Sampling should be fair: per participant and per task type. The rate is a **parameter** in
+  `config/supervision.yaml` (e.g. `spot_check_rate: 0.05` of each participant's accepted clips per
+  day), with a **daily cap** on spot-check items (`spot_check_max_per_day`) because supervisor
+  time has a budget. The pilot values are not decided yet; the defaults must be easy to change
+  without code changes.
 
 ### 4.6 Participant page
-- Their recordings with status (accepted, pending, re-record, rejected), minutes per task type
+- Name and phone number; their recordings with status (accepted, pending, rejected,
+  escalated), minutes per task type
   against target, and all supervision actions on their clips.
 
 ### 4.7 Action log (admin)
@@ -110,7 +124,8 @@ Names are a proposal; check against the current models before writing the migrat
 
 **`review_actions`** (append-only audit trail; never updated or deleted):
 `id`, `review_item_id` (FK, nullable for ad-hoc actions), `recording_id` (FK), `supervisor_id`
-(FK), `decision` (`ok`, `rerecord`, `reject`, `escalate`), `reason_code`, `note`, `created_at`.
+(FK), `decision` (`ok`, `reject`, `escalate`), `reason_code`, `note`, `created_at`,
+`notified_at` (when the contributor was told; set by the feedback job in Phase 5).
 
 **Recording's supervision status:** the latest decision per recording, as a view
 (`recording_supervision_status`) rather than a column, so it can't drift from the action log.
@@ -132,17 +147,48 @@ contract between Stewart's and Dunstan's work. Agree it before either side build
 
 ## 6. What happens after a decision (Phase 5, with Dunstan)
 
-The dashboard only records decisions. Acting on them changes the bot and the target accounting, so
-it is a separate phase, designed together:
+The dashboard only records decisions. Acting on them changes the bot, so it is a separate phase,
+designed together. Decided on 2026-11-07:
 
-- **Counting minutes:** rejected and re-record clips stop counting towards the participant's
-  targets; the bot then naturally asks for more of that task type.
-- **Re-record requests:** the bot sends the participant the same prompt again with a short
-  explanation (within WhatsApp's 24-hour window, or at their next session).
-- **Escalations:** listed for an admin; e.g. a participant who keeps reading the wrong sentence
-  is contacted by their supervisor.
-- The daily report includes supervision results: items reviewed, decisions by type, per-participant
-  re-record and reject rates.
+- **Targets never change.** The per-participant target (e.g. 20 minutes) in
+  `config/assignment_settings.yaml` stays fixed; nobody edits config after a review. What changes
+  is the **counted minutes** towards that target, computed from the database:
+  - clips rejected at arrival (too short, silent, forwarded) never count — as today;
+  - clips rejected by a supervisor **stop counting when the contributor is notified** (the
+    feedback digest sets `review_actions.notified_at`), so the bot's "you have X minutes left"
+    always matches what the contributor has been told;
+  - clips waiting for review keep counting until a decision is notified.
+- **No re-recording of the same prompts.** A rejected clip simply stops counting:
+  - **Contributor minutes:** the contributor is short of their target again, so the bot keeps
+    giving them new tasks of that type until they reach it. That is the top-up.
+  - **Prompt coverage:** coverage counts accepted, recorded and open assignments only, so a prompt
+    whose clip is rejected goes back into the pool and is sent to another speaker.
+  - **Spare prompts:** keep 20–30% more prompts than the targets need, so rejections never leave
+    gaps (check with the simulation script).
+- **Contributors are told exactly which clips were removed.** After review, the bot sends:
+  1. a short summary ("5 clips from today were removed; you have 4 minutes left to record");
+  2. one message per rejected clip, sent as a **WhatsApp reply to the contributor's own voice
+     note** (Cloud API `context.message_id` = the voice note's message ID from
+     `inbound_messages`), so their clip appears quoted above the reason and tip. Each message also
+     names the clip in words ("Sentence: *Kodi Chikondi anamwa…*", "Picture: market scene,
+     Saturday 3 pm") in case they deleted the original. Sent one after another, in order; capped
+     (e.g. 10 per digest, the rest as a count).
+  - One digest a day after review, not a message per decision. `review_actions.notified_at`
+    prevents sending twice and shows supervisors whether the contributor was told.
+- **WhatsApp's 24-hour rule:** the bot can send free-form messages only within 24 hours of the
+  contributor's last message. Feedback is therefore delivered (a) at the start of their next
+  session when they write to the bot, or (b) via a Meta-approved **template message** ("Your
+  recordings have been reviewed. Reply OK to see the results."); once they reply, the window is
+  open and the details follow. Templates are used only for reports.
+- **Supervisors follow up by phone** as well, especially on escalations and repeated rejections.
+- **Escalations are a supervisor's judgement, never automatic.** "Escalate" means "this needs a
+  person to follow up" (e.g. the supervisor notices one contributor has many rejections, or the
+  voice sounds like a different speaker). Escalated items appear in a follow-up list on the
+  dashboard until a supervisor marks them handled, with a note of what was done. No automatic
+  escalation rules and no notifications for now; the overview and participant pages show reject
+  rates so supervisors can spot patterns themselves.
+- The daily report includes supervision results: items reviewed, decisions by type,
+  per-contributor reject rates, minutes removed.
 
 ## 7. Technical approach (recommended)
 
@@ -170,7 +216,7 @@ Each phase is one pull request into `main`, reviewed by Dunstan.
 | 2. Review queue and page | Queue, claim, review page, audio streaming, decisions; backfill `review_items` from existing `needs_review` clips and a worker hook for new ones | A supervisor can review a flagged clip end to end on phone and laptop |
 | 3. Spot checks | Sampler + button + config | Spot-check items created fairly and reviewed like any other item |
 | 4. Overview, participant page, action log | Summaries, filters, CSV export | Numbers match direct SQL queries |
-| 5. Acting on decisions | Minute accounting and re-record requests (with Dunstan) | Bot behaviour changed and tested |
+| 5. Acting on decisions | Minute accounting, prompt coverage, feedback digest with quoted replies, template message (with Dunstan) | Bot behaviour changed and tested; feedback reaches a test contributor |
 | 6. Deploy | Compose service, Caddy route, `.env` settings, `docs/deploy.md` section | Running on the droplet behind HTTPS; first supervisor accounts created |
 
 ## 9. Ways of working
@@ -190,13 +236,24 @@ Each phase is one pull request into `main`, reviewed by Dunstan.
 - **Deploys:** only from `main`, after review, following `docs/deploy.md` (backup first). Switch
   to the app user with `sudo -iu dun` on the droplet.
 
-## 10. Open questions for Dunstan
+## 10. Decisions and open questions
 
-1. Do supervisors see participant names and/or phone numbers, or only IDs?
-2. Final list of decisions and reason codes (is "reject" different from "re-record" for the bot?).
-3. Who are the supervisors for the pilot, and how many accounts?
-4. Spot-check rate for the pilot (e.g. 5% per participant per day)?
-5. Should a rejected clip stop counting towards targets immediately, or only after the daily report?
-6. Address: `/supervise` path or a subdomain?
-7. Does an escalation need a notification (email/WhatsApp to an admin), or is a list on the
-   dashboard enough for now?
+Decided (2026-11-07):
+
+1. Supervisors see contributor names and phone numbers (they manage and follow up contributors).
+2. Decisions are OK / Reject (with reason code) / Escalate; no re-recording of the same prompts;
+   rejected clips stop counting; spare prompts cover the gaps.
+3. Contributors are told exactly which clips were removed, by WhatsApp replies quoting their voice
+   notes; templates are used for reports when the 24-hour window has closed.
+4. Targets in config never change after reviews; a supervisor-rejected clip stops counting towards
+   the target when the contributor is notified.
+5. Spot-check rate and daily cap are config parameters; pilot values to be set later (budget).
+6. At most about 5 supervisors (names needed only when accounts are created at deploy).
+7. Escalation is a manual supervisor decision shown in a follow-up list; no automatic escalation
+   and no notifications for now.
+8. Dashboard address (`/supervise` path or a subdomain): Stewart decides in Phase 6.
+
+Still open:
+
+9. Quoted replies to older voice notes: Stewart runs the test (`scripts/send_test_reply.py` on his
+   own older recordings, with Dunstan) and records how far back WhatsApp shows the quote.

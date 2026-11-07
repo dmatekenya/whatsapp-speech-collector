@@ -206,8 +206,21 @@ Recordings are classified at two levels:
   stronger voice activity model (e.g. Silero VAD) to catch loud non-speech clips; speaker
   consistency checks (uploaded clips first); and the duration report. Results feed supervisor
   follow-up and the `needs_review` queue.
-- **Batch ASR (GPU, every few days):** transcribe with the fine-tuned Chichewa Whisper model;
-  compare read speech against the prompt (CER) to accept, send to human review, or reject.
+- **Batch ASR (GPU, twice a day in the pilot):** two steps.
+  - **Step 1, transcription (in place):** recordings are sent to the fine-tuned Chichewa Whisper
+    model (`whisper_b`, `dmatekenya/whisper-large-v3-chichewa-variant-b-normalized-transcript`;
+    `whisper_v1` available) on a Modal GPU. Inference is the same as in the model's training
+    evaluation: the `openai/whisper-large-v3` processor, language token "shona" (Whisper has no
+    Chichewa token), task "transcribe", no forced decoder IDs, attention mask, fp16, greedy
+    decoding. Sent: stored recordings of registered participants, except clips rejected at arrival
+    (empty, too short or long, `no_speech`, forwarded), duplicates, test participants, and ones the
+    model has already transcribed. Stored per clip in `transcripts`: the raw text (not normalised),
+    the average token log-probability, and the model's repo and commit, so every transcript can be
+    traced to the exact model. Each run is recorded in `asr_batches`; audio is passed in the call
+    and never stored on Modal. Runs are scheduled in `config/asr_batch.yaml` (`runs_per_day`, from
+    02:00 Malawi time) and can be run on demand.
+  - **Step 2, scoring (next):** compare read speech against the prompt (CER/WER) to accept, send
+    to human review, or reject.
 - **Planned speaker check:** compare uploaded clips (and later all clips) with a voice profile
   built from the participant's own recorded voice notes (speaker embeddings); also near-duplicate
   checks. Human review by supervisors.
@@ -254,3 +267,4 @@ Recordings are classified at two levels:
 | 2026-11-05 | Pilot runs on the Meta Cloud API number (+1 618); the Twilio number stays only as a fallback until retired |
 | 2026-11-05 | Speech check on arrival (energy-based, 30 ms frames above −45 dBFS): under 1.5 s of active audio rejected as `no_speech` with a retake request (uses a retake); under 20% active accepted but flagged `low_speech`; `active_seconds` and `mean_dbfs` stored per recording, older recordings backfilled without changing their QC status; thresholds to be calibrated on pilot data |
 | 2026-11-05 | Pre-pilot testing by a tester: silent voice notes were being accepted (fixed by the speech check); uploaded audio accepted by design (flagged for a speaker check, to be run in a daily batch job); redo by swipe-replying to the prompt, since WhatsApp deletions aren't reported to the bot |
+| 2026-11-06 | ASR batch step 1: transcription on a deployed Modal GPU app (Whisper `whisper_b`, training-time inference settings), called from the droplet twice a day; raw transcripts, average log-probability and the model's commit stored per recording and model (history kept); arrival rejections, duplicates and test participants not sent; scoring against prompts is step 2 |

@@ -1,0 +1,55 @@
+# =========
+# ASR BATCH
+# =========
+# config/asr_batch.yaml: when and how stored recordings are transcribed on Modal.
+# Read by scripts/asr_batch.py (through src/asr/config.py), which is run by
+# ./scripts/asr_batch.sh, on demand or hourly from cron with --scheduled.
+# Checked when loaded: a bad value stops the batch with a clear error.
+# On the droplet this file is bind-mounted read-only into the containers
+# (docker-compose.yml), so editing it there (with nano) applies at the next
+# hourly check, without a deploy.
+#
+# The GPU side is scripts/modal_asr_app.py, deployed from the laptop with
+#   uv run modal deploy scripts/modal_asr_app.py
+# Its GPU types (L4, then A10G, then T4), max_containers (2), timeout and
+# scaledown_window (idle containers stop quickly, so it costs nothing when idle)
+# are constants at the top of that file; change them there and redeploy.
+
+# ========
+# SCHEDULE
+# ========
+# Cron runs the batch every hour; it only starts at a slot. Slots are
+# first_run + k x (24 / runs_per_day) hours, local time in timezone; a run may
+# begin within the slot's first hour, once per slot. Changes here apply at the
+# next hourly check, without touching the crontab.
+schedule:
+  runs_per_day: 2          # 0 = paused; must divide 24 (1, 2, 3, 4, 6, 8, 12, 24)
+  first_run: "02:00"       # local time of the first run of the day (24-hour HH:MM)
+  timezone: Africa/Blantyre
+
+# =====
+# MODAL
+# =====
+# The deployed app and class (modal.Cls.from_name), the default model and how
+# much audio goes into one call. Model keys are defined in scripts/modal_asr_app.py:
+#   whisper_b:  dmatekenya/whisper-large-v3-chichewa-variant-b-normalized-transcript
+#   whisper_v1: dmatekenya/whisper-large-v3-chichewa
+modal:
+  app_name: tiyankhuleni-asr
+  class_name: Transcriber
+  model: whisper_b         # default model key; whisper_v1 available (--model)
+  chunk_clips: 30          # clips per call
+  chunk_max_mb: 20         # and at most this much audio per call (a larger clip goes alone)
+
+# =========
+# SELECTION
+# =========
+selection:
+  include_test: false      # test participants (is_test) are skipped unless true or --include-test
+
+# =======
+# RESULTS
+# =======
+# Raw output from Modal per batch: <results_dir>/<batch_id>/results.jsonl
+# (relative to the project root; on the droplet that's the bind-mounted data/).
+results_dir: data/asr_batches

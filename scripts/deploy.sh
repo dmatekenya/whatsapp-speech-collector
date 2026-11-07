@@ -22,7 +22,7 @@ if ! grep -Eq '^DOMAIN=[^[:space:]]+' .env; then
     exit 1
 fi
 # The bind-mounted data folders must exist (and belong to you, not root).
-mkdir -p data/audio data/participants data/prompts backups
+mkdir -p data/audio data/participants data/prompts data/asr_batches backups
 
 # ======
 # UPDATE

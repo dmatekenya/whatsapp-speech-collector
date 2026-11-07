@@ -86,8 +86,8 @@ def clean_db(test_database: None) -> Iterator[None]:
     with db.get_sync_engine().begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE outbound_messages, conversation_state, assignments, sessions,"
-                " recordings, inbound_messages, participants, prompts RESTART IDENTITY"
+                "TRUNCATE transcripts, asr_batches, outbound_messages, conversation_state, assignments,"
+                " sessions, recordings, inbound_messages, participants, prompts RESTART IDENTITY"
             )
         )
         connection.execute(text("ALTER SEQUENCE participant_id_seq RESTART"))

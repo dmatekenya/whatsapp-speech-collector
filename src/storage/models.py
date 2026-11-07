@@ -33,6 +33,10 @@ CHANNELS = ("twilio", "meta")
 FORWARDED_VALUES = ("no", "forwarded", "frequently_forwarded")
 # Where a voice note came from (from Meta's voice and forwarded flags; Twilio: unknown).
 AUDIO_ORIGINS = ("recorded", "forwarded", "uploaded", "unknown")
+ASR_BATCH_STATUSES = ("running", "completed", "partial", "failed", "interrupted")
+ASR_BATCH_TRIGGERS = ("scheduled", "manual")
+# asr: a model's output (written by the ASR batch); human and prompt come later.
+TRANSCRIPT_SOURCES = ("asr", "human", "prompt")
 
 
 def _in_check(column: str, values: tuple[str, ...]) -> str:
@@ -410,3 +414,65 @@ class OutboundMessage(Base):
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ===
+# ASR
+# ===
+class AsrBatch(Base):
+    """One run of the ASR batch (scripts/asr_batch.py). Nothing personal: recording IDs live in transcripts."""
+
+    __tablename__ = "asr_batches"
+    __table_args__ = (
+        CheckConstraint(_in_check("status", ASR_BATCH_STATUSES), name="ck_asr_batches_status"),
+        CheckConstraint(_in_check("trigger", ASR_BATCH_TRIGGERS), name="ck_asr_batches_trigger"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="running")
+    trigger: Mapped[str] = mapped_column(Text, nullable=False)
+    model_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # As Modal reports them once a chunk has come back: the repo and its resolved commit SHA.
+    model_repo: Mapped[str | None] = mapped_column(Text)
+    model_revision: Mapped[str | None] = mapped_column(Text)
+    # The options used: dates, participant IDs, recording IDs, include_test, force, limit.
+    filters: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")
+    )
+    clips_selected: Mapped[int] = mapped_column(nullable=False, server_default=sql_text("0"))
+    clips_transcribed: Mapped[int] = mapped_column(nullable=False, server_default=sql_text("0"))
+    clips_failed: Mapped[int] = mapped_column(nullable=False, server_default=sql_text("0"))
+    # Selected but their WAV file isn't on disk (not sent, not counted in clips_selected).
+    clips_missing: Mapped[int] = mapped_column(nullable=False, server_default=sql_text("0"))
+    audio_seconds: Mapped[float] = mapped_column(Float, nullable=False, server_default=sql_text("0"))
+    gpu: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class Transcript(Base):
+    """A transcript of a recording. Several per recording over time (one per ASR model
+    and run, later human); the latest per source and model is by created_at."""
+
+    __tablename__ = "transcripts"
+    __table_args__ = (
+        CheckConstraint(_in_check("source", TRANSCRIPT_SOURCES), name="ck_transcripts_source"),
+        Index("ix_transcripts_recording_source_model", "recording_id", "source", "model_key"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    recording_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("recordings.id"), nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    # ASR only (None for human and prompt transcripts).
+    model_key: Mapped[str | None] = mapped_column(Text)
+    model_repo: Mapped[str | None] = mapped_column(Text)
+    model_revision: Mapped[str | None] = mapped_column(Text)
+    # As the model returned it (stripped, not normalised).
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Mean log-probability of the generated tokens (ASR only).
+    avg_logprob: Mapped[float | None] = mapped_column(Float)
+    batch_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("asr_batches.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

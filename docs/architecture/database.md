@@ -2,9 +2,10 @@
 
 Last updated: 2026-10-18
 
-Postgres is the system of record. Files (audio, prompt images) live on disk (`data/`) locally and
-in DigitalOcean Spaces on the droplet; the database stores paths to them, relative to a
-configurable root. Schema changes are made only through Alembic migrations (`migrations/versions/`).
+Postgres is the system of record. Files (audio, prompt images) live on disk in `data/`: in the
+repo locally, and on the droplet in `~/whatsapp-speech-collector/data/`, bind-mounted into the
+containers at `/app/data` (audio: `AUDIO_ROOT=/app/data/audio`). The database stores paths to them,
+relative to a configurable root. Schema changes are made only through Alembic migrations (`migrations/versions/`).
 
 > This document describes the intended schema. Check it against the real one with `\d <table>`
 > in psql, and update this file whenever a migration changes a table.
@@ -21,6 +22,8 @@ configurable root. Schema changes are made only through Alembic migrations (`mig
 | `assignments` | Every prompt sent to a participant | `id` | No |
 | `conversation_state` | Where each participant is in the conversation with the bot | `participant_id` | No |
 | `outbound_messages` | Every message the bot sends, and its delivery status | `id` | **Yes** (bodies can contain first names) |
+| `asr_batches` | One row per run of the ASR batch (Modal transcription) | `id` | No |
+| `transcripts` | Transcripts of recordings: ASR per model and run (later human) | `id` | No (recording ID only; the text is the participant's speech) |
 | `alembic_version` | Which migrations have been applied (managed by Alembic) | | No |
 
 ## How they connect
@@ -39,6 +42,8 @@ erDiagram
   PARTICIPANTS ||--o| CONVERSATION_STATE : "is in"
   INBOUND_MESSAGES ||--o{ OUTBOUND_MESSAGES : "answered by"
   ASSIGNMENTS ||--o{ OUTBOUND_MESSAGES : "sent as"
+  RECORDINGS ||--o{ TRANSCRIPTS : "transcribed as"
+  ASR_BATCHES ||--o{ TRANSCRIPTS : wrote
 ```
 
 A voice note's journey: `inbound_messages` (raw) → `recordings` (stored audio) → linked to an
@@ -230,11 +235,48 @@ recipient's number isn't stored here; it comes from the inbound message being an
 | `state_snapshot` | JSONB, nullable | `{"before": {"state", "context"}, "after": {...}}` for the turn that wrote this reply; used to roll the conversation back if the reply isn't delivered. Null for unregistered senders |
 | `created_at`, `sent_at`, `status_updated_at` | timestamptz | |
 
+### asr_batches
+
+One row per run of `scripts/asr_batch.py` (migration `9698f26aa068`). Settings in
+`config/asr_batch.yaml`; raw results in `data/asr_batches/<id>/results.jsonl`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, PK | Also the results folder name |
+| `started_at`, `finished_at` | timestamptz | `started_at` is indexed (the once-per-slot check) |
+| `status` | text | `running`, then `completed` (nothing failed), `partial` (some clips failed), `failed` (none transcribed, or Modal unreachable) or `interrupted` (stopped, or found still `running` by the next batch) |
+| `trigger` | text | `scheduled` (cron, `--scheduled`) or `manual` |
+| `model_key` | text | `whisper_b` or `whisper_v1` (`scripts/modal_asr_app.py`) |
+| `model_repo`, `model_revision` | text, nullable | As Modal reported them: the Hugging Face repo and its resolved commit SHA |
+| `filters` | JSONB | The options used: `since`, `until`, `participants`, `recording_ids`, `include_test`, `force`, `limit` (only those set) |
+| `clips_selected` | int | Sent to Modal |
+| `clips_transcribed`, `clips_failed` | int | Updated after each chunk. Failed clips get no transcript and are retried by the next batch |
+| `clips_missing` | int | Selected but the WAV file wasn't on disk (not sent; IDs in the log) |
+| `audio_seconds` | float | Audio transcribed |
+| `gpu` | text, nullable | e.g. `NVIDIA L4` |
+| `error` | text, nullable | Why the batch failed or stopped |
+
+### transcripts
+
+Several per recording over time: one per ASR model and run, later human transcripts. No unique
+constraint: a forced re-run adds a row; the latest per source and model is by `created_at`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, PK | |
+| `recording_id` | FK → recordings | Index on (`recording_id`, `source`, `model_key`) |
+| `source` | text | `asr` (written by the ASR batch); `human` and `prompt` later |
+| `model_key`, `model_repo`, `model_revision` | text, nullable | ASR only: the model key, Hugging Face repo and commit SHA |
+| `text` | text | As the model returned it (stripped, not normalised). Can be empty |
+| `avg_logprob` | float, nullable | Mean log-probability of the generated tokens (ASR only) |
+| `batch_id` | FK → asr_batches, nullable, indexed | The batch that wrote it |
+| `created_at` | timestamptz | |
+
 ## Planned tables
 
 | Table | Purpose | Comes with |
 |---|---|---|
-| `qc_results` | One row per check run on a recording (stage `fast`, `asr` or `human`): measurements (duration, loudness, clipping, silence, SNR, CER, transcript), decision, thresholds version | Fast QC and the ASR batch |
+| `qc_results` | One row per check run on a recording (stage `fast`, `asr` or `human`): measurements (duration, loudness, clipping, silence, SNR, CER, transcript), decision, thresholds version | ASR batch step 2 (scoring) |
 
 ## Files on disk
 
@@ -245,6 +287,7 @@ recipient's number isn't stored here; it comes from the inbound message being an
 | `data/prompts/images/<batch>/<domain>/` | Original images |
 | `data/prompts/images/_prepared/<domain>/I0001.jpg` | WhatsApp-ready copies: JPEG, metadata stripped, resized |
 | `data/audio/<participant_id>/` | Original `.ogg` and 16 kHz `.wav` per recording |
+| `data/asr_batches/<batch_id>/results.jsonl` | Raw output from Modal per ASR batch (recording IDs and transcripts); `cron.log` on the droplet |
 | `config/` | Import rules and assignment settings (YAML) |
 | `messages/bot_messages_en.yaml` | Bot message texts (Chichewa version later) |
 

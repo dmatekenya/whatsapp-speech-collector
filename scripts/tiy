@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# =============================================================================
+# tiy — read-only helper for the Tiyankhuleni droplet
+# =============================================================================
+# Lets a team member without docker or sudo rights check the running system:
+# service status, application logs, and read-only SQL on tables that hold no
+# names or phone numbers. Installed at /usr/local/bin/tiy (owned by root) and
+# allowed in sudoers to run as the app user only:
+#     <user> ALL=(dun) NOPASSWD: /usr/local/bin/tiy
+#
+# Usage: tiy help
+set -euo pipefail
+
+# =============================================================================
+# Settings
+# =============================================================================
+APP_USER="dun"
+APP_DIR="/home/dun/WhatsApp-speech-collector"
+DB_ROLE="sc_readonly"
+HEALTH_URL="https://bot.zazoai.com/health"
+LOG_SERVICES="api worker caddy"
+MAX_LOG_LINES=5000
+
+# =============================================================================
+# Re-run as the app user (the only account allowed to talk to Docker)
+# =============================================================================
+if [[ "$(id -un)" != "$APP_USER" ]]; then
+  exec sudo -n -u "$APP_USER" /usr/local/bin/tiy "$@"
+fi
+export HOME="/home/$APP_USER"
+cd "$APP_DIR"
+
+# =============================================================================
+# Helpers
+# =============================================================================
+die() { echo "tiy: $*" >&2; exit 1; }
+
+# Run psql inside the postgres container as the read-only role.
+# $1 = extra psql flag ("" or --csv), $2 = command text (passed as an argument, never through a shell)
+run_psql() {
+  docker compose exec -T postgres sh -c \
+    'exec psql -X -q -U "$1" -d "$POSTGRES_DB" -P pager=off -v ON_ERROR_STOP=1 $2 -c "$3"' \
+    sh "$DB_ROLE" "$1" "$2"
+}
+
+readable_tables() {
+  run_psql "--csv" "SELECT table_name FROM information_schema.role_table_grants
+                    WHERE grantee = '$DB_ROLE' AND privilege_type = 'SELECT' ORDER BY 1" | tail -n +2
+}
+
+usage() {
+  cat <<'EOF'
+tiy — read-only tools for the Tiyankhuleni bot
+
+  tiy status                     Services and their state, plus the public health check
+  tiy logs <service> [lines]     Last lines of a log (service: api, worker, caddy; default 100)
+  tiy follow <service>           Follow a log live (Ctrl+C to stop)
+  tiy tables                     Tables and views you can read
+  tiy describe <table>           Columns of a table
+  tiy query "<SQL>"              Run a read-only SQL query (one-line or quoted multi-line)
+  tiy csv "<SQL>"                Same, as CSV:  tiy csv "SELECT ..." > ~/result.csv
+
+Notes
+  - Queries are read-only and stop after 30 seconds.
+  - Tables with names or phone numbers are not readable; use the participants_public view.
+  - psql backslash commands (\d, \!, ...) are not accepted in query/csv; use tiy describe.
+EOF
+}
+
+# =============================================================================
+# Commands
+# =============================================================================
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  status)
+    docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+    echo
+    if out="$(curl -fsS -m 5 "$HEALTH_URL" 2>&1)"; then
+      echo "Health check: OK  $out"
+    else
+      echo "Health check: FAILED  $out"
+    fi
+    ;;
+
+  logs|follow)
+    service="${1:-}"
+    [[ -n "$service" ]] || die "which service? one of: $LOG_SERVICES"
+    [[ " $LOG_SERVICES " == *" $service "* ]] || die "unknown service '$service' (choose: $LOG_SERVICES)"
+    if [[ "$cmd" == "follow" ]]; then
+      exec docker compose logs --no-color --tail 20 -f "$service"
+    fi
+    lines="${2:-100}"
+    [[ "$lines" =~ ^[0-9]+$ ]] && (( lines >= 1 && lines <= MAX_LOG_LINES )) \
+      || die "lines must be a number from 1 to $MAX_LOG_LINES"
+    docker compose logs --no-color --tail "$lines" "$service"
+    ;;
+
+  tables)
+    readable_tables
+    ;;
+
+  describe)
+    table="${1:-}"
+    [[ "$table" =~ ^[a-z_][a-z0-9_]*$ ]] || die "give a table name, e.g. tiy describe recordings"
+    readable_tables | grep -qx "$table" || die "'$table' is not readable (see: tiy tables)"
+    run_psql "" "\\d $table"
+    ;;
+
+  query|csv)
+    sql="${1:-}"
+    [[ -n "${sql// /}" ]] || die "give a query in quotes, e.g. tiy query \"SELECT count(*) FROM recordings\""
+    [[ "$sql" != *\\* ]] || die "backslash commands are not allowed; use tiy tables / tiy describe"
+    if [[ "$cmd" == "csv" ]]; then run_psql "--csv" "$sql"; else run_psql "" "$sql"; fi
+    ;;
+
+  help|-h|--help)
+    usage
+    ;;
+
+  *)
+    usage
+    exit 1
+    ;;
+esac

@@ -331,7 +331,107 @@ docker compose exec -T postgres sh -c 'pg_restore --clean --if-exists --no-owner
 docker compose start api worker
 ```
 
-## 10. Local development afterwards
+## 10. ASR batch (Modal)
+
+Twice a day the droplet sends new recordings to a Chichewa Whisper model on a Modal GPU and stores
+the transcripts in the database (`transcripts`, one row per recording and model; `asr_batches`, one
+row per run). The GPU code runs only on Modal (`scripts/modal_asr_app.py`, deployed from your Mac);
+the droplet just calls it with the WAV files. Settings are in `config/asr_batch.yaml`, which you can
+edit on the droplet without a deploy (see "Change the schedule" below).
+
+### Give the droplet a Modal token
+
+Use a separate token for the droplet, so you can revoke it without affecting your Mac. In the
+Modal dashboard: **Settings → API Tokens → New Token** (name it e.g. `speech droplet`). Then
+**on the droplet**, add both values to `.env` (`nano .env`):
+
+```bash
+MODAL_TOKEN_ID=ak-...
+MODAL_TOKEN_SECRET=as-...
+```
+
+Containers read `.env` when they're created, so recreate them:
+
+```bash
+docker compose up -d
+```
+
+And tell the batch wrapper to run inside the api container (once):
+
+```bash
+echo 'export ASR_BATCH_RUNNER=docker' >> ~/.bashrc && source ~/.bashrc
+mkdir -p data/asr_batches
+```
+
+### Deploy the Modal app (on your Mac)
+
+```bash
+uv run modal deploy scripts/modal_asr_app.py
+```
+
+It uses your Mac's own Modal login (`modal setup`). The first call downloads the model weights
+(about 3 GB) into the `hf-model-cache` volume; later calls reuse them. Idle GPU containers stop
+after a minute, so the app costs nothing between batches.
+
+Redeploy after changing anything in `scripts/modal_asr_app.py`: the models or their revisions,
+GPU types, batch size, timeouts or package pins. Changes to `config/asr_batch.yaml` or the
+droplet's code don't need a redeploy.
+
+### Run a batch by hand
+
+**On the droplet**, look first, then run:
+
+```bash
+./scripts/asr_batch.sh --dry-run          # what would be sent: counts and audio minutes, no Modal call
+./scripts/asr_batch.sh                    # transcribe everything not yet transcribed by the default model
+```
+
+Options: `--since 2026-11-01` / `--until 2026-11-03` (local dates, inclusive), `--participant
+P0012` (repeatable), `--recordings 120,121`, `--include-test`, `--limit 50`, `--model whisper_v1`,
+`--force` (transcribe again even if this model already has). Only one batch runs at a time; a
+second one exits with a message.
+
+It ends with a summary: clips selected, transcribed and failed, audio minutes, wall time, GPU and
+model revision. Failed clips get no transcript and are retried by the next batch. The raw output is
+in `data/asr_batches/<batch id>/results.jsonl`; it contains transcripts of participants' speech, so
+treat it like the audio.
+
+### Schedule it
+
+Cron runs the batch every hour; it only starts at the slots in `config/asr_batch.yaml`
+(`runs_per_day: 2` from `first_run: "02:00"` Malawi time: 02:00 and 14:00), once per slot.
+**On the droplet:**
+
+```bash
+crontab -e     # add this line:
+5 * * * * ASR_BATCH_RUNNER=docker /home/deploy/whatsapp-speech-collector/scripts/asr_batch.sh --scheduled >> /home/deploy/whatsapp-speech-collector/data/asr_batches/cron.log 2>&1
+```
+
+Check it with `tail data/asr_batches/cron.log` after a slot, or in the database:
+
+```bash
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT id, trigger, status, clips_selected, clips_transcribed, clips_failed, started_at FROM asr_batches ORDER BY id DESC LIMIT 5"'
+```
+
+### Change the schedule, pause, or use another model
+
+- **Change or pause:** edit `config/asr_batch.yaml` **on the droplet** with `nano` and set
+  `runs_per_day` (`0` pauses; otherwise 1, 2, 3, 4, 6, 8, 12 or 24). The file is bind-mounted
+  read-only into the containers, so the next hourly check uses it: no deploy, and the crontab stays
+  as it is. Check what the container sees with `docker compose exec api cat config/asr_batch.yaml`.
+  - Use `nano`, which saves the file in place. An editor that writes a new file instead (vim can)
+    leaves the containers on the old version until
+    `docker compose up -d --force-recreate api worker`.
+  - The edit is a local change to the droplet's git checkout. Copy it into the repo on your Mac
+    too, or `./scripts/deploy.sh` may stop at `git pull` when the file has also changed on GitHub.
+    In that case, `git checkout config/asr_batch.yaml` on the droplet and deploy again.
+- **Another model:** `./scripts/asr_batch.sh --model whisper_v1` transcribes the recordings that
+  model hasn't done yet; the earlier transcripts are kept. To make it the default, change
+  `modal.model` in the config.
+- **Redo with the same model** (e.g. after changing its revision and redeploying):
+  `./scripts/asr_batch.sh --force`. New rows are added; the latest per model counts.
+
+## 11. Local development afterwards
 
 The droplet now answers your production WhatsApp number. Keep developing on your laptop against
 the **Twilio WhatsApp sandbox** instead:

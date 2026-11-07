@@ -121,8 +121,10 @@ Recordings are classified at two levels:
   whether to start) are kept but never counted toward any target. Only voice notes in a
   free-speech session count as free speech.
 - **Retakes:** clips that are too short, too long, empty or without speech get a retake request (up
-  to 2 retakes per prompt); failed attempts are stored as rejected. A forwarded voice note gets a request to
-  record it themselves, but does not use up a retake: the prompt stays open.
+  to 2 retakes per prompt); failed attempts are stored as rejected. Outside free speech, a forwarded
+  voice note or an attached audio file gets a request to record a new voice note, but does not use
+  up a retake: the prompt stays open. In free speech both are accepted (see section 7), so the
+  usual retakes apply.
 - **Too-long sentences (planned):** after a first too-long reading the participant is asked to read
   a little faster; after a second, the sentence is skipped for that person. A sentence that runs
   too long for two different speakers is retired automatically for review.
@@ -162,16 +164,29 @@ Recordings are classified at two levels:
 - Exact duplicates (re-sent audio) are detected by content hash.
 - **Audio origin** (from the Meta Cloud API flags), stored per recording:
   - **recorded** (voice note recorded in WhatsApp): accepted as normal.
-  - **forwarded** (from another chat): never accepted for any task; stored as rejected
-    (`not_recorded`). In a session the participant is asked to record it themselves and the open
-    prompt stays open (no retake used); outside a session the bot replies as usual. Forwarded wins
-    over uploaded (a forwarded audio file counts as forwarded).
-  - **uploaded** (audio file attached, e.g. recorded outside WhatsApp): accepted and counted, but
-    flagged for review (`speaker_check_pending`) until a speaker check confirms it is the
-    participant's voice.
+  - **forwarded** (from another chat, e.g. an older voice note the participant once sent a friend)
+    and **uploaded** (an audio file attached, e.g. recorded outside WhatsApp) follow the same rule:
+    - **in free speech:** accepted and counted toward the free-speech target, but flagged for review
+      (`needs_review`, `speaker_check_pending`) until a speaker check confirms it is the
+      participant's own voice. Older recordings are often more natural speech. The usual checks
+      still apply (5–29 s, speech check, duplicates, retakes), and the bot replies as for any
+      accepted clip. `audio_origin` stays `forwarded` or `uploaded`, so these clips can always be
+      told apart.
+    - **in all other task types** (sentences, pictures, conversation starters): not accepted;
+      stored as rejected (`not_recorded`). The participant is asked to record a new voice note (the
+      reply says whether it was forwarded or an audio file) and the open prompt stays open (no
+      retake used).
+    - **outside a session:** stored as rejected (`not_recorded`) and the bot replies as usual.
+    - Forwarded wins over uploaded (a forwarded audio file counts as forwarded).
+  - The recording tips tell participants to record a new voice note for sentences, pictures and
+    questions, and the free-speech instructions say an older voice note of their own may be
+    forwarded and will be checked.
   - **unknown** (Twilio-era recordings, which carry no flags): accepted as normal.
   - The rule for each origin is set in `config/assignment_settings.yaml` (`audio_origin`:
-    accept, reject or accept_flagged). Existing recordings were backfilled from their flags.
+    accept, reject or accept_flagged), and a task type can override it
+    (`task_types.free_speech.audio_origin`: forwarded and uploaded accept_flagged). Existing
+    recordings were backfilled from their flags; recordings from before these changes keep their
+    status (uploads accepted earlier in other task types stay `speaker_check_pending`).
 
 ## 8. Quality control
 
@@ -204,7 +219,7 @@ Recordings are classified at two levels:
 - **Planned fast QC (CPU):** clipping, voice activity, SNR estimate.
 - **Planned daily batch job (CPU):** run over each day's recordings: speech/noise detection with a
   stronger voice activity model (e.g. Silero VAD) to catch loud non-speech clips; speaker
-  consistency checks (uploaded clips first); and the duration report. Results feed supervisor
+  consistency checks (uploaded and forwarded clips first); and the duration report. Results feed supervisor
   follow-up and the `needs_review` queue.
 - **Batch ASR (GPU, twice a day in the pilot):** two steps.
   - **Step 1, transcription (in place):** recordings are sent to the fine-tuned Chichewa Whisper
@@ -213,7 +228,7 @@ Recordings are classified at two levels:
     evaluation: the `openai/whisper-large-v3` processor, language token "shona" (Whisper has no
     Chichewa token), task "transcribe", no forced decoder IDs, attention mask, fp16, greedy
     decoding. Sent: stored recordings of registered participants, except clips rejected at arrival
-    (empty, too short or long, `no_speech`, forwarded), duplicates, test participants, and ones the
+    (empty, too short or long, `no_speech`, forwarded or uploaded outside free speech), duplicates, test participants, and ones the
     model has already transcribed. Stored per clip in `transcripts`: the raw text (not normalised),
     the average token log-probability, and the model's repo and commit, so every transcript can be
     traced to the exact model. Each run is recorded in `asr_batches`; audio is passed in the call
@@ -221,7 +236,7 @@ Recordings are classified at two levels:
     02:00 Malawi time) and can be run on demand.
   - **Step 2, scoring (next):** compare read speech against the prompt (CER/WER) to accept, send
     to human review, or reject.
-- **Planned speaker check:** compare uploaded clips (and later all clips) with a voice profile
+- **Planned speaker check:** compare uploaded and forwarded clips (and later all clips) with a voice profile
   built from the participant's own recorded voice notes (speaker embeddings); also near-duplicate
   checks. Human review by supervisors.
 - QC thresholds to be calibrated on pilot data.
@@ -268,3 +283,5 @@ Recordings are classified at two levels:
 | 2026-11-05 | Speech check on arrival (energy-based, 30 ms frames above −45 dBFS): under 1.5 s of active audio rejected as `no_speech` with a retake request (uses a retake); under 20% active accepted but flagged `low_speech`; `active_seconds` and `mean_dbfs` stored per recording, older recordings backfilled without changing their QC status; thresholds to be calibrated on pilot data |
 | 2026-11-05 | Pre-pilot testing by a tester: silent voice notes were being accepted (fixed by the speech check); uploaded audio accepted by design (flagged for a speaker check, to be run in a daily batch job); redo by swipe-replying to the prompt, since WhatsApp deletions aren't reported to the bot |
 | 2026-11-06 | ASR batch step 1: transcription on a deployed Modal GPU app (Whisper `whisper_b`, training-time inference settings), called from the droplet twice a day; raw transcripts, average log-probability and the model's commit stored per recording and model (history kept); arrival rejections, duplicates and test participants not sent; scoring against prompts is step 2 |
+| 2026-11-07 | Older/forwarded voice notes accepted for free speech only, flagged for speaker check; other task types still require a new recording |
+| 2026-11-07 | Uploaded audio files follow the same rule as forwarded voice notes: accepted for free speech only, flagged for speaker check; rejected (`not_recorded`) in all other task types and outside a session, with a request for a new voice note and no retake used |

@@ -45,6 +45,7 @@ from src.conversation.states import (  # noqa: F401 - STATES is re-exported
 from src.conversation.messages import Catalog, Rendered, get_catalog
 from src.conversation.outbound import PromptPart, Reply, emit
 from src.logging_config import mask_phone
+from src.storage.audio import apply_audio_origin
 from src.storage.db import get_sync_sessionmaker
 from src.storage.models import (
     Assignment,
@@ -404,14 +405,15 @@ class Engine:
     # AUDIO IN A SESSION
     # ==================
 
-    def _origin_rejected(self, turn: Turn) -> bool:
-        """config audio_origin rejects this voice note (e.g. forwarded)."""
+    def _apply_origin_rule(self, turn: Turn, assignment: Assignment) -> bool:
+        """Apply config audio_origin for the task type this clip answers (the
+        worker could only apply the global rule). True if it's rejected (e.g.
+        forwarded or uploaded, except in free_speech)."""
         recording = turn.recording
-        return (
-            recording is not None
-            and recording.status == "stored"
-            and self.config.audio_origin.policy(recording.audio_origin) == "reject"
-        )
+        if recording is None or recording.status != "stored":
+            return False
+        apply_audio_origin(recording, recording.audio_origin, assignment.prompt_type, self.config)
+        return self.config.audio_policy(recording.audio_origin, assignment.prompt_type) == "reject"
 
     def _problem(self, recording: Recording | None) -> str | None:
         duration = recording.duration_s if recording is not None else None
@@ -429,7 +431,7 @@ class Engine:
 
     def _flag_low_speech(self, recording: Recording) -> None:
         """Accepted, but mostly silence: marked for review. A clip already flagged
-        (e.g. speaker_check_pending for an uploaded file) keeps its reason."""
+        (e.g. speaker_check_pending for a forwarded or uploaded clip in free speech) keeps its reason."""
         if (
             self.config.clip_checks.problem(recording.active_seconds, recording.duration_s) == "low_speech"
             and recording.qc_status == "pending"
@@ -448,10 +450,12 @@ class Engine:
                 end_session(self.db, stale.id, "abandoned", self.now)
             return self.offer(turn)
 
-        if self._origin_rejected(turn):
-            # Forwarded: never used. The prompt stays open, and it doesn't use up a retake.
+        if self._apply_origin_rule(turn, assignment):
+            # e.g. forwarded or uploaded: never used. The prompt stays open, and it
+            # doesn't use up a retake. The reply says which ("forwarded" would be wrong for a file).
             record_failed_attempt(self.db, assignment.id, turn.recording.id, "not_recorded")
-            return self.repeat_prompt(turn, assignment, self.r("problems.not_recorded"))
+            key = "problems.uploaded_audio_file" if turn.recording.audio_origin == "uploaded" else "problems.not_recorded"
+            return self.repeat_prompt(turn, assignment, self.r(key))
 
         problem = self._problem(turn.recording)
         values = self._values(
@@ -584,7 +588,7 @@ class Engine:
             return Reply(parts=[self.r(problem, **self._values(turn.participant, duration="0"))])
 
         # idle: anything starts the conversation (audio is kept as an unassigned
-        # recording; a forwarded one is already marked rejected by the worker).
+        # recording; the worker has applied the global audio_origin rule to it).
         return self.offer(turn)
 
 

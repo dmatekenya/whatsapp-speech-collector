@@ -49,14 +49,25 @@
 #   - reject: never used (QC rejected, reason not_recorded); the participant is asked to record
 #     it themselves, and an open prompt stays open (it doesn't use up a retake);
 #   - accept_flagged: used and counted, but marked for review (QC needs_review, reason
-#     speaker_check_pending), e.g. an audio file that may not be the participant's own voice.
+#     speaker_check_pending), e.g. audio that may not be the participant's own voice.
+#   These are the rules for every task type. A task type can override some of them with its own
+#   audio_origin (under task_types), e.g. free_speech accepts forwarded voice notes and audio files
+#   (older recordings of the participant's own are often more natural) but flags them for a
+#   speaker check.
+#   Outside a session (no task type) the rules here apply. Only the origins recorded, forwarded,
+#   uploaded and unknown and the three actions above are allowed, or the app refuses to start.
 #
 # Values are starting points for the pilot. Adjust from pilot data rather than editing code.
 task_types:
   sentence:             {prompted: true, speakers_per_prompt: 5, speech_type: scripted}
   image:                {prompted: true, speakers_per_prompt: 7, speech_type: spontaneous}
   conversation_starter: {prompted: true, speakers_per_prompt: 3, speech_type: spontaneous}
-  free_speech:          {prompted: false, speech_type: spontaneous}
+  free_speech:
+    prompted: false
+    speech_type: spontaneous
+    audio_origin:               # overrides the global audio_origin, for free speech only
+      forwarded: accept_flagged # an older voice note of their own: counted, speaker check later
+      uploaded: accept_flagged  # an audio file of their own: counted, speaker check later
 session_size: 10              # prompts per session before the bot pauses
 assignment_expiry_hours: 24   # unanswered prompts return to the pool
 max_retakes_per_prompt: 2
@@ -72,7 +83,7 @@ clip_checks:
   min_active_ratio: 0.20      # sound in less than 20% of the clip: low_speech (accepted, flagged)
 fresh_start_after_hours: 24   # same as assignment_expiry_hours
 reply_window_hours: 23.5
-audio_origin:
+audio_origin:                   # for all task types, unless a task type overrides it
   recorded: accept              # a voice note recorded in WhatsApp
-  forwarded: reject             # forwarded from another chat: not the participant's recording
-  uploaded: accept_flagged      # an audio file attached from the phone: checked later
+  forwarded: reject             # forwarded from another chat: ask for a new recording
+  uploaded: reject              # an audio file attached from the phone: ask for a new recording

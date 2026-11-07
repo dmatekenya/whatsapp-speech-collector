@@ -85,7 +85,7 @@ instructions:
     3. Press and hold the microphone button, wait one second, then start speaking.
     4. Speak clearly, at your normal pace.
     5. Wait one second after you finish before letting go.
-    6. Always record a new voice note. Never forward one.
+    6. For sentences, pictures and questions, always record a new voice note. Don't forward one or attach an audio file.
   sentence: |
     For each sentence:
     • Read the whole sentence exactly as written.
@@ -109,6 +109,7 @@ instructions:
     • Talk for about {min_seconds} to {max_seconds} seconds.
     • Press and hold the microphone button while you speak.
     • One topic per voice note is fine.
+    • You can also forward an older voice note of your own, if it's only your voice. We check that it's you.
     • Don't mention private details such as full names, addresses or phone numbers.
   reminder: "Reply *INSTRUCTIONS* at any time to see these tips again."
 

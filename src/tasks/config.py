@@ -74,6 +74,26 @@ SpeechType = Literal["scripted", "spontaneous"]
 SPEECH_TYPES: tuple[str, ...] = ("scripted", "spontaneous")
 
 
+AudioPolicy = Literal["accept", "reject", "accept_flagged"]
+AUDIO_POLICY_REASONS: dict[str, tuple[str, str]] = {
+    # policy -> (qc_status, qc_reason) it sets; accept sets nothing.
+    "reject": ("rejected", "not_recorded"),
+    "accept_flagged": ("needs_review", "speaker_check_pending"),
+}
+
+
+class AudioOriginOverrides(BaseModel):
+    """task_types.<type>.audio_origin: rules for this task type only. An origin
+    left out uses the global audio_origin rule."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    recorded: AudioPolicy | None = None
+    forwarded: AudioPolicy | None = None
+    uploaded: AudioPolicy | None = None
+    unknown: AudioPolicy | None = None
+
+
 class TaskType(BaseModel):
     """One task type. Prompted types send a prompt from the prompt bank (sentence,
     picture, question); unprompted ones (free_speech) just invite a voice note.
@@ -89,6 +109,9 @@ class TaskType(BaseModel):
     speech_type: SpeechType
     # How many different participants should record each prompt (prompted types only).
     speakers_per_prompt: PositiveInt | None = None
+    # Audio origin rules that differ from the global ones for this type (e.g.
+    # forwarded voice notes and audio files accepted, flagged, in free_speech only).
+    audio_origin: AudioOriginOverrides | None = None
 
     @model_validator(mode="after")
     def _speakers_only_when_prompted(self) -> "TaskType":
@@ -99,14 +122,11 @@ class TaskType(BaseModel):
         return self
 
 
-AudioPolicy = Literal["accept", "reject", "accept_flagged"]
-
-
 class AudioOriginRules(BaseModel):
     """What to do with a voice note, by where it came from (recordings.audio_origin).
 
     accept: use it as usual. reject: never use it (qc_status rejected,
-    qc_reason not_recorded) and ask for a recording. accept_flagged: use and
+    qc_reason not_recorded) and ask for a new recording. accept_flagged: use and
     count it, but mark it for review (qc_status needs_review,
     qc_reason speaker_check_pending).
     """
@@ -115,7 +135,7 @@ class AudioOriginRules(BaseModel):
 
     recorded: AudioPolicy = "accept"
     forwarded: AudioPolicy = "reject"
-    uploaded: AudioPolicy = "accept_flagged"
+    uploaded: AudioPolicy = "reject"
     # Twilio doesn't say where audio came from.
     unknown: AudioPolicy = "accept"
 
@@ -220,6 +240,14 @@ class CollectionConfig(BaseModel):
             if task_type in self.task_types:
                 totals[self.speech_type(task_type)] += value
         return totals
+
+    def audio_policy(self, origin: str | None, task_type: str | None = None) -> AudioPolicy:
+        """The rule for a voice note: the task type's override if it has one for
+        this origin, else the global audio_origin rule. No task type (outside a
+        session, or not yet matched to a prompt): the global rule."""
+        overrides = self.task_types[task_type].audio_origin if task_type in self.task_types else None
+        override = getattr(overrides, origin or "unknown", None) if overrides is not None else None
+        return override or self.audio_origin.policy(origin)
 
     def is_prompted(self, task_type: str) -> bool:
         return self.task_type(task_type).prompted

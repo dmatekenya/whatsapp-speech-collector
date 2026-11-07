@@ -271,21 +271,21 @@ def test_no_speech_uses_up_retakes_like_too_short(chat: ChatHarness) -> None:
     assert minutes()["sentence"] == 0
 
 
-def test_low_speech_is_counted_and_keeps_an_earlier_flag(chat: ChatHarness) -> None:
+def test_low_speech_is_counted_but_flagged(chat: ChatHarness) -> None:
     chat.text("Hi")
     chat.text("1")
 
     assert only(chat.voice(20, active_seconds=2)).startswith("✅ Received.")
-    # Uploaded and mostly silent: the speaker check flag stays (one reason per clip).
-    assert only(chat.voice(20, active_seconds=2, origin="uploaded")).startswith("✅ Received.")
+    assert only(chat.voice(20, active_seconds=2)).startswith("✅ Received.")
     assert only(chat.voice(20, active_seconds=12)).startswith("✅ That's 3 recordings.")  # session over
 
     assert [(r.qc_status, r.qc_reason) for r in recordings()] == [
         ("needs_review", "low_speech"),
-        ("needs_review", "speaker_check_pending"),
+        ("needs_review", "low_speech"),
         ("pending", None),
     ]
     assert minutes()["sentence"] == pytest.approx(60 / 60)
+    # A clip that is also flagged for a speaker check keeps that reason: see the free speech tests.
 
 
 def test_free_speech_stays_unlinked(chat: ChatHarness) -> None:
@@ -842,7 +842,12 @@ def free_speech_config() -> CollectionConfig:
         {
             "task_types": {
                 **{t: {"prompted": True, "speakers_per_prompt": 5, "speech_type": SPEECH[t]} for t in ("sentence", "image", "conversation_starter")},
-                "free_speech": {"prompted": False, "speech_type": "spontaneous"},
+                # As in config/assignment_settings.yaml: forwarded and uploaded audio count in free speech only.
+                "free_speech": {
+                    "prompted": False,
+                    "speech_type": "spontaneous",
+                    "audio_origin": {"forwarded": "accept_flagged", "uploaded": "accept_flagged"},
+                },
             },
             "session_size": 5,
             "assignment_expiry_hours": 24,
@@ -942,24 +947,64 @@ def test_forwarded_voice_note_while_a_sentence_is_open(chat: ChatHarness) -> Non
     assert only(chat.voice(10, origin="recorded")).startswith("✅ Received. Sentence 2 of 3:")
 
 
-def test_forwarded_voice_note_outside_a_session_is_rejected_with_the_usual_reply(chat: ChatHarness) -> None:
-    offer = only(chat.voice(10, origin="forwarded"))  # idle: the offer, as before
+@pytest.mark.parametrize("origin", ["forwarded", "uploaded"])
+def test_forwarded_or_uploaded_audio_outside_a_session_is_rejected_with_the_usual_reply(chat: ChatHarness, origin: str) -> None:
+    offer = only(chat.voice(10, origin=origin))  # idle: the offer, as before
     assert text_of("ready.ask") in offer
-    chat_reply = only(chat.voice(10, origin="forwarded"))  # awaiting_ready: as before
+    chat_reply = only(chat.voice(10, origin=origin))  # awaiting_ready: as before
     assert chat_reply == text_of("ready.ask")
     for recording in recordings():
         assert recording.assignment_id is None
         assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
 
 
-def test_uploaded_audio_is_counted_but_flagged(chat: ChatHarness) -> None:
+def test_uploaded_audio_while_a_sentence_is_open_is_rejected(chat: ChatHarness) -> None:
     chat.text("Hi")
     chat.text("1")
-    assert only(chat.voice(10, origin="uploaded")).startswith("✅ Received. Sentence 2 of 3:")
+    first = assignments()[0]
+
+    reply = only(chat.voice(10, origin="uploaded"))
+
+    assert reply.startswith(text_of("problems.uploaded_audio_file"))
+    assert "Sentence 1 of 3:" in reply and first.prompt_text_snapshot in reply  # the same prompt
     recording = recordings()[-1]
-    assert (recording.qc_status, recording.qc_reason) == ("needs_review", "speaker_check_pending")
-    assert recording.assignment_id == assignments()[0].id
-    assert minutes()["sentence"] == pytest.approx(10 / 60)
+    assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
+    assert recording.assignment_id == first.id  # linked as a failed attempt
+    # More uploads never use up the retakes (max 2) or skip the prompt.
+    for _ in range(3):
+        assert "Sentence 1 of 3:" in only(chat.voice(10, origin="uploaded"))
+    assignment = assignments()[0]
+    assert assignment.status == "sent" and assignment.retake_count == 0 and assignment.recording_id is None
+    assert minutes()["sentence"] == 0
+    assert only(chat.voice(10, origin="recorded")).startswith("✅ Received. Sentence 2 of 3:")
+
+
+NOT_RECORDED_REPLY = {"forwarded": "problems.not_recorded", "uploaded": "problems.uploaded_audio_file"}
+
+
+@pytest.mark.parametrize("origin", ["forwarded", "uploaded"])
+@pytest.mark.parametrize(
+    ("task_type", "label"),
+    [("sentence", "Sentence"), ("image", "Picture"), ("conversation_starter", "Question")],
+)
+def test_forwarded_or_uploaded_audio_is_rejected_in_prompted_types(
+    chat: ChatHarness, monkeypatch: pytest.MonkeyPatch, task_type: str, label: str, origin: str
+) -> None:
+    set_targets(monkeypatch, **{t: (1 if t == task_type else 0) for t in SPEECH})
+    chat.text("Hi")
+    chat.text("1")
+    (first,) = assignments()
+    assert first.prompt_type == task_type
+
+    reply = "\n".join(s.body for s in chat.voice(10, origin=origin))
+
+    assert reply.startswith(text_of(NOT_RECORDED_REPLY[origin])) and f"{label} 1 of 3" in reply
+    recording = recordings()[-1]
+    assert recording.audio_origin == origin
+    assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
+    assignment = assignments()[0]
+    assert assignment.status == "sent" and assignment.retake_count == 0 and assignment.recording_id is None
+    assert minutes()[task_type] == 0
 
 
 def test_unknown_origin_behaves_as_before(chat: ChatHarness) -> None:
@@ -968,3 +1013,85 @@ def test_unknown_origin_behaves_as_before(chat: ChatHarness) -> None:
     assert only(chat.voice(10)).startswith("✅ Received. Sentence 2 of 3:")
     recording = recordings()[-1]
     assert recording.audio_origin == "unknown" and recording.qc_status == "pending"
+
+
+# ===========================================
+# FORWARDED AND UPLOADED AUDIO IN FREE SPEECH
+# ===========================================
+FLAGGED_ORIGINS = pytest.mark.parametrize("origin", ["forwarded", "uploaded"])
+
+
+def start_free_speech(free_chat: ChatHarness) -> Assignment:
+    free_chat.text("Hi")
+    free_chat.text("1")
+    (invitation,) = assignments()
+    assert invitation.prompt_type == "free_speech"
+    return invitation
+
+
+def starts_with_a_variant(reply: str, key: str, **values: object) -> bool:
+    raw = CATALOG.raw(key)
+    return any(reply.startswith(v.format(**values).strip()) for v in (raw if isinstance(raw, list) else [raw]))
+
+
+@FLAGGED_ORIGINS
+def test_forwarded_or_uploaded_audio_counts_in_free_speech_but_is_flagged(free_chat: ChatHarness, origin: str) -> None:
+    invitation = start_free_speech(free_chat)
+
+    reply = only(free_chat.voice(10, origin=origin))
+
+    assert reply.startswith("✅ Received. Voice note 2 of 5:")  # the usual reply: the session moves on
+    assert text_of(NOT_RECORDED_REPLY[origin]) not in reply
+    recording = recordings()[-1]
+    assert recording.audio_origin == origin
+    assert (recording.qc_status, recording.qc_reason) == ("needs_review", "speaker_check_pending")
+    assert recording.assignment_id == invitation.id
+    first = assignments()[0]
+    assert first.status == "recorded" and first.recording_id == recording.id
+    assert minutes()["free_speech"] == pytest.approx(10 / 60)
+
+
+@FLAGGED_ORIGINS
+@pytest.mark.parametrize(
+    ("seconds", "active", "problem"),
+    [(3, None, "too_short"), (35, None, "too_long"), (10, 0.5, "no_speech")],
+)
+def test_forwarded_or_uploaded_free_speech_clip_still_gets_the_usual_retake(
+    free_chat: ChatHarness, origin: str, seconds: float, active: float | None, problem: str
+) -> None:
+    start_free_speech(free_chat)
+
+    reply = only(free_chat.voice(seconds, origin=origin, active_seconds=active))
+
+    assert starts_with_a_variant(reply, f"problems.{problem}", duration=f"{seconds:.0f}", min_seconds="5", max_seconds="29")
+    assert "Voice note 1 of 5:" in reply
+    recording = recordings()[-1]
+    assert (recording.qc_status, recording.qc_reason) == ("rejected", problem)
+    assignment = assignments()[0]
+    assert assignment.status == "sent" and assignment.retake_count == 1
+    assert minutes()["free_speech"] == 0
+
+
+@FLAGGED_ORIGINS
+def test_free_speech_clip_with_little_speech_keeps_the_speaker_check_flag(free_chat: ChatHarness, origin: str) -> None:
+    start_free_speech(free_chat)
+    assert only(free_chat.voice(10, origin=origin, active_seconds=1.6)).startswith("✅ Received.")
+    recording = recordings()[-1]
+    assert (recording.qc_status, recording.qc_reason) == ("needs_review", "speaker_check_pending")
+
+
+def test_forwarded_duplicate_in_free_speech_is_not_counted(free_chat: ChatHarness) -> None:
+    start_free_speech(free_chat)
+    free_chat.voice(10, origin="forwarded")
+    reply = only(free_chat.voice(10, origin="forwarded", duplicate=True))
+    assert reply.startswith(text_of("problems.duplicate").splitlines()[0])
+    assert minutes()["free_speech"] == pytest.approx(10 / 60)
+
+
+@FLAGGED_ORIGINS
+def test_forwarded_or_uploaded_audio_before_a_free_speech_session_is_still_rejected(free_chat: ChatHarness, origin: str) -> None:
+    offer = only(free_chat.voice(10, origin=origin))  # idle: the offer, as before
+    assert text_of("today.free_speech") in offer
+    (recording,) = recordings()
+    assert recording.assignment_id is None
+    assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")

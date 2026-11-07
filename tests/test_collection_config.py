@@ -220,7 +220,7 @@ def test_old_speakers_per_prompt_section_gets_a_clear_message(tmp_path: Path) ->
 def test_audio_origin_rules() -> None:
     rules = CollectionConfig.model_validate(with_types(FOUR, FOUR_SPLIT)).audio_origin
     assert [rules.policy(o) for o in ("recorded", "forwarded", "uploaded", "unknown", None)] == [
-        "accept", "reject", "accept_flagged", "accept", "accept",
+        "accept", "reject", "reject", "accept", "accept",
     ]  # fmt: skip
 
 
@@ -231,11 +231,68 @@ def test_unknown_audio_origin_policy_is_refused() -> None:
         CollectionConfig.model_validate(values)
 
 
+def with_free_speech_override(override: dict) -> dict:
+    types = {**FOUR, "free_speech": {**FOUR["free_speech"], "audio_origin": override}}
+    return with_types(types, FOUR_SPLIT)
+
+
+def test_task_type_audio_origin_override() -> None:
+    cfg = CollectionConfig.model_validate(with_free_speech_override({"forwarded": "accept_flagged"}))
+    assert cfg.audio_policy("forwarded", "free_speech") == "accept_flagged"
+    # Origins it doesn't mention, other types and no task type: the global rules.
+    assert cfg.audio_policy("uploaded", "free_speech") == "reject"
+    assert cfg.audio_policy("recorded", "free_speech") == "accept"
+    assert [cfg.audio_policy("forwarded", t) for t in ("sentence", "image", "conversation_starter", None)] == ["reject"] * 4
+
+
+@pytest.mark.parametrize(
+    ("override", "where"),
+    [({"emailed": "accept"}, "task_types.free_speech.audio_origin.emailed"), ({"forwarded": "ignore"}, "task_types.free_speech.audio_origin.forwarded")],
+)
+def test_bad_task_type_audio_origin_override_is_refused(tmp_path: Path, override: dict, where: str) -> None:
+    path = tmp_path / "settings.yaml"
+    path.write_text(yaml.safe_dump(with_free_speech_override(override)))
+    with pytest.raises(CollectionConfigError, match=where):
+        load_collection_config(path)
+
+
+def test_override_for_an_unknown_task_type_is_refused(tmp_path: Path) -> None:
+    values = with_types({**FOUR, "free_speach": {**FOUR["free_speech"], "audio_origin": {"forwarded": "accept_flagged"}}}, FOUR_SPLIT)
+    path = tmp_path / "settings.yaml"
+    path.write_text(yaml.safe_dump(values))
+    with pytest.raises(CollectionConfigError, match="free_speach"):
+        load_collection_config(path)
+
+
+def test_applying_the_rule_again_with_the_task_type_replaces_the_workers_rule() -> None:
+    from src.storage.audio import apply_audio_origin
+    from src.storage.models import Recording
+
+    cfg = CollectionConfig.model_validate(
+        with_free_speech_override({"forwarded": "accept_flagged", "uploaded": "accept"}) | {"audio_origin": {"uploaded": "accept_flagged"}}
+    )
+    recording = Recording(qc_status="pending", qc_reason=None)
+    apply_audio_origin(recording, "forwarded", None, cfg)  # the worker: global rule
+    assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
+    apply_audio_origin(recording, "forwarded", "free_speech", cfg)  # the engine, in free speech
+    assert (recording.qc_status, recording.qc_reason) == ("needs_review", "speaker_check_pending")
+    assert recording.audio_origin == "forwarded"
+
+    uploaded = Recording(qc_status="pending", qc_reason=None)
+    apply_audio_origin(uploaded, "uploaded", None, cfg)
+    apply_audio_origin(uploaded, "uploaded", "free_speech", cfg)  # accept: back to unchecked
+    assert (uploaded.qc_status, uploaded.qc_reason) == ("pending", None)
+
+
 def test_the_real_config_has_the_four_types_and_rules() -> None:
     cfg = load_collection_config(DEFAULT_PATH)
     assert cfg.default_targets == {"sentence": 6.0, "image": 5.0, "conversation_starter": 5.0, "free_speech": 4.0}
     assert cfg.clip_seconds.max == 29
-    assert cfg.audio_origin.forwarded == "reject" and cfg.audio_origin.uploaded == "accept_flagged"
+    assert cfg.audio_origin.forwarded == "reject" and cfg.audio_origin.uploaded == "reject"
+    # Forwarded voice notes and audio files count (flagged) in free speech only.
+    for origin in ("forwarded", "uploaded"):
+        assert cfg.audio_policy(origin, "free_speech") == "accept_flagged"
+        assert [cfg.audio_policy(origin, t) for t in ("sentence", "image", "conversation_starter", None)] == ["reject"] * 4
 
 
 # ===========

@@ -262,6 +262,16 @@ def test_selection_rules(people: None, storage: LocalFileStorage) -> None:
     assert done in selected(storage, force=True)[0]
 
 
+@pytest.mark.parametrize("origin", ["forwarded", "uploaded"])
+def test_forwarded_or_uploaded_clips_are_sent_only_when_accepted(people: None, storage: LocalFileStorage, origin: str) -> None:
+    # In free speech: accepted, flagged for a speaker check, so transcribed.
+    free_speech = add_recording(storage, audio_origin=origin, qc_status="needs_review", qc_reason="speaker_check_pending")
+    # In any other task type (or outside a session): rejected on arrival, skipped.
+    add_recording(storage, audio_origin=origin, qc_status="rejected", qc_reason="not_recorded")
+    chosen, excluded, _ = selected(storage)
+    assert chosen == [free_speech] and excluded == {REJECTED: 1}
+
+
 def test_selection_filters(people: None, storage: LocalFileStorage) -> None:
     early = add_recording(storage, stored_at=local(2026, 11, 1, 23, 50))
     p2 = add_recording(storage, participant_id="P0002", stored_at=local(2026, 11, 2, 0, 10))

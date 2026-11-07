@@ -102,11 +102,11 @@ and rejected views are produced by export.
 | `provider_media_deleted` | bool | Media removed from the provider after safe storage. Twilio only: Meta keeps received media for a limited time, so nothing is deleted |
 | `is_voice_note` | bool, nullable | Meta only: `true` recorded in WhatsApp, `false` an uploaded audio file. Null for Twilio, which doesn't say |
 | `forwarded` | text, nullable | Meta only: `no`, `forwarded`, `frequently_forwarded`. Null for Twilio |
-| `audio_origin` | text | `recorded`, `forwarded`, `uploaded` or `unknown`, from the two columns above: forwarded wins, then `is_voice_note`; Twilio rows are `unknown`. `config/assignment_settings.yaml` (`audio_origin`) decides what happens: forwarded is rejected (`not_recorded`), uploaded is counted but flagged (`speaker_check_pending`), recorded and unknown are used as usual. Backfilled for older rows by migration `d8e2b5c1f9a4` |
+| `audio_origin` | text | `recorded`, `forwarded`, `uploaded` or `unknown`, from the two columns above: forwarded wins, then `is_voice_note`; Twilio rows are `unknown`. `config/assignment_settings.yaml` (`audio_origin`) decides what happens: forwarded and uploaded are rejected (`not_recorded`) except in free speech, where they are counted but flagged (`speaker_check_pending`, per-type override in `task_types.free_speech.audio_origin`); recorded and unknown are used as usual. Backfilled for older rows by migration `d8e2b5c1f9a4` |
 | `status` | text | Storage status: `pending`, `stored`, `failed` |
 | `error` | text, nullable | |
 | `qc_status` | text, indexed | Whether the clip is usable: `pending`, `accepted`, `rejected`, `needs_review`. Rejected clips never count toward minutes; `needs_review` ones do |
-| `qc_reason` | text, nullable | `too_short`, `too_long`, `empty`, `no_speech` (failed attempts, rejected, set by the conversation engine); `low_speech` (accepted but mostly silence, `needs_review`); `not_recorded` (forwarded audio, rejected); `speaker_check_pending` (uploaded audio, `needs_review`; kept if the clip is also low speech). The QC step will add e.g. `duplicate`, `wrong_sentence` |
+| `qc_reason` | text, nullable | `too_short`, `too_long`, `empty`, `no_speech` (failed attempts, rejected, set by the conversation engine); `low_speech` (accepted but mostly silence, `needs_review`); `not_recorded` (forwarded or uploaded audio outside free speech, rejected); `speaker_check_pending` (forwarded or uploaded audio in free speech, `needs_review`; also uploads accepted in any task type before 2026-11-07; kept if the clip is also low speech). The QC step will add e.g. `duplicate`, `wrong_sentence` |
 | `created_at`, `updated_at` | timestamptz | |
 
 ### participants

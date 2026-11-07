@@ -98,6 +98,7 @@ def required_keys(task_types: Iterable[str], unprompted: Iterable[str] = ()) -> 
         "duplicate",
         "retake_limit",
         "not_recorded",
+        "uploaded_audio_file",
     ):
         keys[f"problems.{problem}"] = durations
     for task_type in task_types:

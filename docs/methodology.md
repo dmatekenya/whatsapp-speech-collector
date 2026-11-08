@@ -80,9 +80,25 @@ Recordings are classified at two levels:
   derived from the task type, so changing a task type's speech type reclassifies all of its
   recordings. Reports (e.g. the task-bank simulation) show it next to the task type and sum
   minutes per speech type. With the current split the target is 30% scripted, 70% spontaneous.
-- **Clip length:** 5–29 s for all tasks (29 s is one second below the 30 s window used by
-  Whisper-style ASR models, leaving room for padding). Open question: whether longer uploaded
-  free-speech files should be accepted and segmented later.
+- **Clip length:** participants are asked for about 15–30 s. Limits are set per task type so slow
+  readers and natural speech aren't penalised; long clips are kept and split into shorter pieces
+  during preprocessing, before training (not at collection time):
+
+  | Task type | Minimum | Flagged as long (kept, counted) | Rejected above |
+  |---|---|---|---|
+  | Sentences | 5 s | over 30 s: `long_sentence` | 45 s |
+  | Pictures, conversation starters | 5 s | over 30 s: `long_clip` | 60 s |
+  | Free speech, recorded in WhatsApp | 5 s | over 30 s: `long_clip` | 60 s |
+  | Free speech, forwarded or uploaded | 5 s | over 30 s: `long_clip` | 120 s |
+  | Outside a session | never rejected for length | over 30 s: `long_clip` | — |
+
+  Clips between the minimum and the rejection limit are accepted and counted in full (subject to
+  the other checks: audio origin, speech check, duplicates). The long flag
+  (`recordings.length_flag`) is information for preprocessing, not a review flag: it never puts a
+  clip into `needs_review`. Too short or too long: a retake request naming the limit for that task
+  ("keep it under 45 seconds" / "1 minute" / "2 minutes"). Limits are in
+  `config/assignment_settings.yaml` (`clip_limits`). 30 s is Whisper's window: clips over 30 s
+  need long-form ASR (section 8).
 - **Prompt IDs** are assigned at import, one sequence per type: `S00001` sentences, `I0001` images,
   `C0001` conversation starters. Free speech has no prompts. Imports must run in the same order on
   every environment so IDs match (and match the browser app).
@@ -93,7 +109,8 @@ Recordings are classified at two levels:
     since Chichewa words are long and characters predict reading time better than words. Out-of-
     target sentences are flagged, not rejected, and are assigned last.
   - After the pilot, limits are calibrated from real reading times (median duration and seconds
-    per character per sentence); sentences with a median above ~27 s or below 5 s are retired.
+    per character per sentence); sentences whose readings are usually flagged `long_sentence`
+    (median over 30 s) or below 5 s are retired. This is a later, report-driven step.
   - Sensitive questionnaire topics are excluded.
 - **Images:** organised into theme folders (theme = folder name); prepared copies are JPEG,
   metadata stripped, resized for WhatsApp. No text in images, no recognisable real people.
@@ -120,14 +137,12 @@ Recordings are classified at two levels:
 - **Unassigned recordings:** voice notes sent outside a session (before starting, or while asked
   whether to start) are kept but never counted toward any target. Only voice notes in a
   free-speech session count as free speech.
-- **Retakes:** clips that are too short, too long, empty or without speech get a retake request (up
-  to 2 retakes per prompt); failed attempts are stored as rejected. Outside free speech, a forwarded
+- **Retakes:** clips that are too short, too long (limits per task type, section 4), empty or
+  without speech get a retake request (up to 2 retakes per prompt); failed attempts are stored as
+  rejected. Outside free speech, a forwarded
   voice note or an attached audio file gets a request to record a new voice note, but does not use
   up a retake: the prompt stays open. In free speech both are accepted (see section 7), so the
   usual retakes apply.
-- **Too-long sentences (planned):** after a first too-long reading the participant is asked to read
-  a little faster; after a second, the sentence is skipped for that person. A sentence that runs
-  too long for two different speakers is retired automatically for review.
 - **Prompt expiry:** unanswered prompts expire after 24 hours and return to the pool.
 - **Coming back:** within 24 hours the participant carries on (a reminder of the open prompt if
   they send text). After more than 24 hours (configurable), the session is paused, open prompts
@@ -169,7 +184,7 @@ Recordings are classified at two levels:
     - **in free speech:** accepted and counted toward the free-speech target, but flagged for review
       (`needs_review`, `speaker_check_pending`) until a speaker check confirms it is the
       participant's own voice. Older recordings are often more natural speech. The usual checks
-      still apply (5–29 s, speech check, duplicates, retakes), and the bot replies as for any
+      still apply (5 s to 2 minutes, speech check, duplicates, retakes), and the bot replies as for any
       accepted clip. `audio_origin` stays `forwarded` or `uploaded`, so these clips can always be
       told apart.
     - **in all other task types** (sentences, pictures, conversation starters): not accepted;
@@ -190,16 +205,22 @@ Recordings are classified at two levels:
 
 ## 8. Quality control
 
-- **On arrival (worker):** duration bounds (5–29 s), empty audio, duplicates, audio origin,
-  speech check; retake requests.
+- **On arrival (worker and conversation engine):** the worker measures duration and speech levels
+  on the WAV and applies the default audio-origin rule and long flag; once the clip is matched to
+  a prompt, the engine applies the task type's rules: audio origin, empty audio, duplicates,
+  duration limits (section 4), speech check; retake requests.
 - **Speech check (energy-based):** the worker measures each voice note on its 16 kHz WAV and
   stores `active_seconds` (time in 30 ms frames louder than −45 dBFS) and `mean_dbfs` (overall
   level). After the duration check, for all task types:
   - under 1.5 s of active audio: rejected as `no_speech`; the participant is asked to hold the
     microphone button and speak clearly, and the same prompt is sent again. This uses up a retake,
     like a too-short clip.
+  - a clip over 30 s with active audio under 20% of it: also rejected as `no_speech` (same reply,
+    uses a retake). Without this a long, mostly silent clip would count in full toward the target
+    (e.g. 2 s of speech in a 2-minute clip).
   - otherwise, active audio under 20% of the clip: accepted and counted, but flagged for review
     (`needs_review`, `low_speech`). A clip already flagged for a speaker check keeps that flag.
+    The long flag is separate and doesn't affect this.
   - Settings are in `config/assignment_settings.yaml` (`clip_checks`); `scripts/check_silence.py`
     shows the measurements and verdicts for a folder of WAVs, for calibration. Recordings stored
     before the check are measured by `scripts/backfill_speech_levels.py`, without changing their
@@ -234,6 +255,12 @@ Recordings are classified at two levels:
     traced to the exact model. Each run is recorded in `asr_batches`; audio is passed in the call
     and never stored on Modal. Runs are scheduled in `config/asr_batch.yaml` (`runs_per_day`, from
     02:00 Malawi time) and can be run on demand.
+  - **Clips over 30 s:** Whisper decodes 30 s at a time, and the batch app would cut longer clips
+    off. Until long-form decoding is enabled, the batch skips them (they stay untranscribed, keep
+    their `long_clip` / `long_sentence` flag, and a later batch picks them up). Long-form
+    generation (Whisper decoding the clip window by window) is being tested first in
+    `scripts/modal_asr_compare.py` on real 60 s and 120 s clips; it is added to the batch app
+    only once the transcripts look right. `transcripts.long_form` will record which clips used it.
   - **Step 2, scoring (next):** compare read speech against the prompt (CER/WER) to accept, send
     to human review, or reject.
 - **Planned speaker check:** compare uploaded and forwarded clips (and later all clips) with a voice profile
@@ -285,3 +312,5 @@ Recordings are classified at two levels:
 | 2026-11-06 | ASR batch step 1: transcription on a deployed Modal GPU app (Whisper `whisper_b`, training-time inference settings), called from the droplet twice a day; raw transcripts, average log-probability and the model's commit stored per recording and model (history kept); arrival rejections, duplicates and test participants not sent; scoring against prompts is step 2 |
 | 2026-11-07 | Older/forwarded voice notes accepted for free speech only, flagged for speaker check; other task types still require a new recording |
 | 2026-11-07 | Uploaded audio files follow the same rule as forwarded voice notes: accepted for free speech only, flagged for speaker check; rejected (`not_recorded`) in all other task types and outside a session, with a request for a new voice note and no retake used |
+| 2026-11-07 | Per-task clip limits: sentences flagged > 30 s, rejected > 45 s; pictures/questions/free speech up to 60 s, older voice notes/uploads in free speech up to 120 s; aim 15–30 s; long clips kept, flagged and split before training; ASR uses long-form transcription for clips > 30 s (being tested; until then the ASR batch skips them). Supersedes the planned "read faster, then skip" handling of too-long sentences |
+| 2026-11-07 | Long, mostly silent clips: over 30 s with under 20% active audio rejected as `no_speech` (retake), so they can't count in full |

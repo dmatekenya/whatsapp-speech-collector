@@ -27,12 +27,25 @@
 #   to participants is the sum of the per-type targets. A participant can be given their own in
 #   the registry (participants.attributes.targets_minutes): {per_participant: 6} (split as here),
 #   or explicit per-type minutes, e.g. {sentence: 2, image: 1, conversation_starter: 1}.
-# - clip_seconds: accepted recording length; shorter or longer clips get a retake request.
+# - clip_limits: how long a recording may be (seconds, measured on the stored WAV).
+#   - min_seconds: shorter clips get a retake request (QC rejected, too_short), for all types.
+#   - per task type (task_types; default for a type not listed and outside a session):
+#     - flag_over: a longer clip is accepted and counted in full, but recordings.length_flag is
+#       set (flag: long_sentence or long_clip). It's information, not a review flag (QC status
+#       is unchanged): long clips are split into shorter pieces before training.
+#     - max: a longer clip gets a retake request (QC rejected, too_long) naming this limit.
+#     - max_forwarded_or_uploaded: a higher max for forwarded voice notes and audio files, where
+#       they're accepted (free_speech): older voice notes are often longer.
+#   Outside a session clips are never rejected for length, but default flag_over still flags them.
+#   Rules: all numbers positive, min_seconds < flag_over <= max <= max_forwarded_or_uploaded, and
+#   only task types from task_types, or the app refuses to start.
 # - clip_checks: is there speech in the clip? The worker measures every voice note on its 16 kHz
 #   WAV: active seconds = time in frame_ms frames whose level is above active_dbfs (dBFS; 0 is the
 #   loudest possible). Applied after the duration check, for all task types:
 #   - fewer than min_active_seconds active: rejected (QC reason no_speech) and a retake request,
 #     which uses up a retake like a too-short clip;
+#   - longer than long_clip_seconds with an active share below long_clip_min_active_ratio: also
+#     rejected as no_speech (a long clip that is mostly silence would otherwise count in full);
 #   - otherwise, active share of the clip below min_active_ratio: accepted and counted, but marked
 #     for review (QC needs_review, reason low_speech).
 #   Measure real clips with scripts/check_silence.py before changing these.
@@ -75,11 +88,22 @@ targets_minutes:              # per participant
   per_participant: 20
   # 6 + 5 + 5 + 4 minutes: 30% scripted (sentences), 70% spontaneous (the rest).
   split: {sentence: 0.30, image: 0.25, conversation_starter: 0.25, free_speech: 0.20}
-clip_seconds: {min: 5, max: 29}
+# Clip length: participants are asked for 15 to 30 seconds; slow readers and natural speech may
+# run longer (see clip_limits above).
+clip_limits:
+  min_seconds: 5
+  default:                {flag_over: 30, max: 60}    # outside a session; types not listed
+  task_types:
+    sentence:             {flag_over: 30, max: 45, flag: long_sentence}
+    image:                {flag_over: 30, max: 60}
+    conversation_starter: {flag_over: 30, max: 60}
+    free_speech:          {flag_over: 30, max: 60, max_forwarded_or_uploaded: 120}
 clip_checks:
   frame_ms: 30                # analysis frame length
   active_dbfs: -45            # a frame louder than this has sound in it
   min_active_seconds: 1.5     # less sound than this: no_speech (rejected, retake)
+  long_clip_seconds: 30       # a clip longer than this ...
+  long_clip_min_active_ratio: 0.20  # ... with sound in less than 20% of it: no_speech too
   min_active_ratio: 0.20      # sound in less than 20% of the clip: low_speech (accepted, flagged)
 fresh_start_after_hours: 24   # same as assignment_expiry_hours
 reply_window_hours: 23.5

@@ -95,3 +95,17 @@ def apply_audio_origin(
     elif (recording.qc_status, recording.qc_reason) in AUDIO_POLICY_REASONS.values():
         # Set by an earlier call under a different rule: back to unchecked.
         recording.qc_status, recording.qc_reason = "pending", None
+
+
+# ===========
+# CLIP LENGTH
+# ===========
+def apply_length_flag(
+    recording: Recording, task_type: str | None = None, config: CollectionConfig | None = None
+) -> None:
+    """recordings.length_flag from config clip_limits: long_sentence / long_clip when the clip
+    is longer than flag_over for its task type, else None. Information only: never changes
+    the QC status. The worker sets it with the default limits (no task type yet); the
+    conversation engine sets it again once it knows the prompt the clip answers."""
+    config = config or get_collection_config()
+    recording.length_flag = config.clip_limits.length_flag(recording.duration_s, task_type)

@@ -100,7 +100,7 @@ def config() -> CollectionConfig:
             "max_retakes_per_prompt": 2,
             "targets_minutes": {"per_participant": 30, "split": {"sentence": 1 / 3, "image": 1 / 3, "conversation_starter": 1 / 3}},
             # The test audio is 2 seconds long.
-            "clip_seconds": {"min": 1, "max": 30},
+            "clip_limits": {"min_seconds": 1, "default": {"flag_over": 30, "max": 30}},
         }
     )
 

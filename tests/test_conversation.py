@@ -44,7 +44,7 @@ def config() -> CollectionConfig:
             "assignment_expiry_hours": 24,
             "max_retakes_per_prompt": 2,
             "targets_minutes": {"per_participant": 30, "split": {"sentence": THIRD, "image": THIRD, "conversation_starter": THIRD}},
-            "clip_seconds": {"min": 5, "max": 30},
+            "clip_limits": {"min_seconds": 5, "default": {"flag_over": 30, "max": 30}},
         }
     )
 
@@ -213,7 +213,7 @@ def test_retakes_for_short_long_and_empty_then_skip(chat: ChatHarness) -> None:
     short = only(chat.voice(3))
     assert short.startswith("That recording was very short (3 seconds)") and prompt in short
     long = only(chat.voice(45))
-    assert "longer than the 30-second limit" in long and prompt in long
+    assert long.startswith("That recording was 45 seconds. Please record it again and keep it under 30 seconds.") and prompt in long
     a1 = assignments()[0]
     assert a1.retake_count == 2 and a1.status == "sent"
 
@@ -853,7 +853,12 @@ def free_speech_config() -> CollectionConfig:
             "assignment_expiry_hours": 24,
             "max_retakes_per_prompt": 2,
             "targets_minutes": {"per_participant": 2, "split": dict.fromkeys(("sentence", "image", "conversation_starter", "free_speech"), 0.25)},
-            "clip_seconds": {"min": 5, "max": 29},
+            # As in config/assignment_settings.yaml.
+            "clip_limits": {
+                "min_seconds": 5,
+                "default": {"flag_over": 30, "max": 60},
+                "task_types": {"free_speech": {"flag_over": 30, "max": 60, "max_forwarded_or_uploaded": 120}},
+            },
         }
     )
 
@@ -870,7 +875,8 @@ def free_chat(clean_db: None, monkeypatch: pytest.MonkeyPatch) -> ChatHarness:
 def test_free_speech_session_end_to_end(free_chat: ChatHarness) -> None:
     offer = only(free_chat.text("Hi"))
     assert text_of("today.free_speech") in offer
-    assert "For each voice note:" in offer and "Talk for about 5 to 29 seconds." in offer
+    assert "For each voice note:" in offer and "Aim for 15 to 30 seconds; a voice note can be up to 1 minute." in offer
+    assert "forward an older voice note of your own (up to 2 minutes)" in offer
 
     first = only(free_chat.text("1"))
     assert first.startswith("Voice note 1 of 5: tell me about anything you like.")
@@ -1054,7 +1060,7 @@ def test_forwarded_or_uploaded_audio_counts_in_free_speech_but_is_flagged(free_c
 @FLAGGED_ORIGINS
 @pytest.mark.parametrize(
     ("seconds", "active", "problem"),
-    [(3, None, "too_short"), (35, None, "too_long"), (10, 0.5, "no_speech")],
+    [(3, None, "too_short"), (121, None, "too_long"), (10, 0.5, "no_speech")],
 )
 def test_forwarded_or_uploaded_free_speech_clip_still_gets_the_usual_retake(
     free_chat: ChatHarness, origin: str, seconds: float, active: float | None, problem: str
@@ -1063,7 +1069,8 @@ def test_forwarded_or_uploaded_free_speech_clip_still_gets_the_usual_retake(
 
     reply = only(free_chat.voice(seconds, origin=origin, active_seconds=active))
 
-    assert starts_with_a_variant(reply, f"problems.{problem}", duration=f"{seconds:.0f}", min_seconds="5", max_seconds="29")
+    lengths = {"max_length": "2 minutes", "max_length_older": "2 minutes"}
+    assert starts_with_a_variant(reply, f"problems.{problem}", duration=f"{seconds:.0f}", min_seconds="5", **lengths)
     assert "Voice note 1 of 5:" in reply
     recording = recordings()[-1]
     assert (recording.qc_status, recording.qc_reason) == ("rejected", problem)
@@ -1095,3 +1102,149 @@ def test_forwarded_or_uploaded_audio_before_a_free_speech_session_is_still_rejec
     (recording,) = recordings()
     assert recording.assignment_id is None
     assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
+
+
+# ===========
+# CLIP LENGTH
+# ===========
+REAL_LIMITS = {
+    "min_seconds": 5,
+    "default": {"flag_over": 30, "max": 60},
+    "task_types": {
+        "sentence": {"flag_over": 30, "max": 45, "flag": "long_sentence"},
+        "image": {"flag_over": 30, "max": 60},
+        "conversation_starter": {"flag_over": 30, "max": 60},
+    },
+}
+
+
+@pytest.fixture
+def limits_chat(world: None, monkeypatch: pytest.MonkeyPatch) -> ChatHarness:
+    """The three prompted types with the clip limits of config/assignment_settings.yaml."""
+    current = CollectionConfig.model_validate({**config().model_dump(), "clip_limits": REAL_LIMITS})
+    monkeypatch.setattr("src.conversation.engine.get_collection_config", lambda: current)
+    return ChatHarness(REGISTERED_SENDER, start=T0)
+
+
+def start_type(chat: ChatHarness, monkeypatch: pytest.MonkeyPatch, task_type: str) -> Assignment:
+    set_targets(monkeypatch, **{t: (10 if t == task_type else 0) for t in SPEECH})
+    chat.text("Hi")
+    chat.text("1")
+    (first,) = assignments()
+    assert first.prompt_type == task_type
+    return first
+
+
+TYPES = [("sentence", 45, "long_sentence", "45 seconds"), ("image", 60, "long_clip", "1 minute"), ("conversation_starter", 60, "long_clip", "1 minute")]
+
+
+@pytest.mark.parametrize(("task_type", "max_s", "flag", "limit_text"), TYPES)
+@pytest.mark.parametrize(
+    ("seconds", "outcome"),
+    [(4.9, "too_short"), (5.1, "ok"), (30, "ok"), (31, "long"), ("max-0.5", "long"), ("max+0.5", "too_long")],
+)
+def test_clip_limits_per_task_type(
+    limits_chat: ChatHarness, monkeypatch: pytest.MonkeyPatch,
+    task_type: str, max_s: float, flag: str, limit_text: str, seconds: float | str, outcome: str,
+) -> None:  # fmt: skip
+    first = start_type(limits_chat, monkeypatch, task_type)
+    seconds = {"max-0.5": max_s - 0.5, "max+0.5": max_s + 0.5}.get(seconds, seconds)
+
+    reply = only(limits_chat.voice(seconds))
+
+    recording = recordings()[-1]
+    assignment = assignments()[0]
+    if outcome in ("too_short", "too_long"):
+        assert (recording.qc_status, recording.qc_reason) == ("rejected", outcome)
+        assert assignment.status == "sent" and assignment.retake_count == 1
+        assert minutes()[task_type] == 0
+        if outcome == "too_long":
+            assert reply.startswith(f"That recording was {seconds:.0f} seconds. Please record it again and keep it under {limit_text}.")
+        return
+    assert reply.startswith("✅ Received.")
+    assert assignment.id == first.id and assignment.status == "recorded"
+    # Counted in full; the long flag is information only, never a review flag.
+    assert minutes()[task_type] == pytest.approx(seconds / 60)
+    assert (recording.qc_status, recording.qc_reason) == ("pending", None)
+    assert recording.length_flag == (flag if outcome == "long" else None)
+
+
+def test_long_flag_and_review_flags_are_independent(limits_chat: ChatHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    start_type(limits_chat, monkeypatch, "image")
+    limits_chat.voice(40, active_seconds=9)  # 22.5% active: not low speech, long
+    limits_chat.voice(20, active_seconds=2)  # low speech, not long
+    first, second = recordings()
+    assert (first.qc_status, first.length_flag) == ("pending", "long_clip")
+    assert (second.qc_status, second.qc_reason, second.length_flag) == ("needs_review", "low_speech", None)
+
+
+@pytest.mark.parametrize(("active", "accepted"), [(6, False), (10, True)])
+def test_long_clip_that_is_mostly_silent_is_no_speech(
+    limits_chat: ChatHarness, monkeypatch: pytest.MonkeyPatch, active: float, accepted: bool
+) -> None:
+    start_type(limits_chat, monkeypatch, "conversation_starter")
+    reply = only(limits_chat.voice(40, active_seconds=active))  # 15% or 25% active
+    recording = recordings()[-1]
+    if accepted:
+        assert reply.startswith("✅ Received.") and recording.qc_status == "pending"
+        assert recording.length_flag == "long_clip"
+    else:
+        assert starts_with_a_variant(reply, "problems.no_speech")  # the usual no-speech retake
+        assert (recording.qc_status, recording.qc_reason) == ("rejected", "no_speech")
+        assert assignments()[0].retake_count == 1
+
+
+def test_forwarded_long_sentence_is_still_rejected_as_not_recorded(limits_chat: ChatHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    start_type(limits_chat, monkeypatch, "sentence")
+    reply = only(limits_chat.voice(100, origin="forwarded"))
+    assert reply.startswith(text_of("problems.not_recorded"))
+    recording = recordings()[-1]
+    assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
+    assert assignments()[0].retake_count == 0
+
+
+@pytest.mark.parametrize(
+    ("origin", "seconds", "accepted", "limit_text"),
+    [
+        ("recorded", 59, True, None),
+        ("recorded", 61, False, "1 minute"),
+        ("forwarded", 61, True, None),
+        ("forwarded", 119, True, None),
+        ("uploaded", 119, True, None),
+        ("forwarded", 121, False, "2 minutes"),
+        ("uploaded", 121, False, "2 minutes"),
+    ],
+)
+def test_free_speech_clip_limits_by_origin(
+    free_chat: ChatHarness, origin: str, seconds: float, accepted: bool, limit_text: str | None
+) -> None:
+    start_free_speech(free_chat)
+
+    reply = only(free_chat.voice(seconds, origin=origin))
+
+    recording = recordings()[-1]
+    flagged = ("needs_review", "speaker_check_pending") if origin != "recorded" else ("pending", None)
+    if accepted:
+        assert recording.length_flag == "long_clip" and assignments()[0].status == "recorded"
+        assert (recording.qc_status, recording.qc_reason) == flagged
+        assert minutes()["free_speech"] == pytest.approx(seconds / 60)
+    else:
+        assert reply.startswith(f"That recording was {seconds} seconds. Please record it again and keep it under {limit_text}.")
+        assert (recording.qc_status, recording.qc_reason) == ("rejected", "too_long")
+        assert assignments()[0].retake_count == 1 and minutes()["free_speech"] == 0
+
+
+@pytest.mark.parametrize(("origin", "qc"), [("recorded", ("pending", None)), ("forwarded", ("rejected", "not_recorded"))])
+def test_long_clip_outside_a_session_is_kept_and_flagged(free_chat: ChatHarness, origin: str, qc: tuple) -> None:
+    offer = only(free_chat.voice(150, origin=origin))  # over every max: never rejected for length here
+    assert text_of("today.free_speech") in offer
+    (recording,) = recordings()
+    assert recording.assignment_id is None and recording.length_flag == "long_clip"
+    assert (recording.qc_status, recording.qc_reason) == qc
+
+
+@pytest.mark.parametrize(("seconds", "text"), [(45, "45 seconds"), (60, "1 minute"), (120, "2 minutes"), (90, "90 seconds"), (29.5, "29.5 seconds")])
+def test_length_text(seconds: float, text: str) -> None:
+    from src.conversation.engine import length_text
+
+    assert length_text(seconds) == text

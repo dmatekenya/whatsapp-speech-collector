@@ -45,7 +45,7 @@ from src.conversation.states import (  # noqa: F401 - STATES is re-exported
 from src.conversation.messages import Catalog, Rendered, get_catalog
 from src.conversation.outbound import PromptPart, Reply, emit
 from src.logging_config import mask_phone
-from src.storage.audio import apply_audio_origin
+from src.storage.audio import apply_audio_origin, apply_length_flag
 from src.storage.db import get_sync_sessionmaker
 from src.storage.models import (
     Assignment,
@@ -109,6 +109,14 @@ def _minutes(value: float) -> str:
     return f"{value:.1f}"
 
 
+def length_text(seconds: float) -> str:
+    """A clip limit as participants read it: "45 seconds", "1 minute", "2 minutes"."""
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = int(seconds // 60)
+        return f"{minutes} minute" + ("" if minutes == 1 else "s")
+    return f"{seconds:g} seconds"
+
+
 @dataclass
 class Turn:
     db: Session
@@ -170,8 +178,8 @@ class Engine:
             # Always the sum of the per-type targets.
             "total_target": _minutes(self.config.total(targets)),
             "session_size": self.config.session_size,
-            "min_seconds": f"{self.config.clip_seconds.min:g}",
-            "max_seconds": f"{self.config.clip_seconds.max:g}",
+            "min_seconds": f"{self.config.clip_limits.min_seconds:g}",
+            **self._length_values(None),
             "support_contact": get_settings().support_contact,
         }
         for task_type in types:
@@ -179,6 +187,15 @@ class Engine:
             values[f"{task_type}_target"] = _minutes(targets.get(task_type, 0.0))
         values.update(extra)
         return values
+
+    def _length_values(self, task_type: str | None, origin: str | None = None) -> dict[str, str]:
+        """max_length: the limit for this task type and origin; max_length_older: for an
+        older voice note or audio file (forwarded / uploaded) in this task type."""
+        limits = self.config.clip_limits
+        return {
+            "max_length": length_text(limits.max_seconds(task_type, origin)),
+            "max_length_older": length_text(limits.max_seconds(task_type, "forwarded")),
+        }
 
     def task_name(self, task_type: str) -> str:
         """Lowercase, for use mid-sentence ("Next up: *reading sentences*")."""
@@ -226,7 +243,8 @@ class Engine:
         parts = []
         for key in ("general", task_type):
             if key and (force or not seen.get(key)):
-                parts.append(self.r(f"instructions.{key}", **self._values(turn.participant)))
+                lengths = self._length_values(task_type) if key == task_type else {}
+                parts.append(self.r(f"instructions.{key}", **self._values(turn.participant, **lengths)))
                 seen[key] = True
         if parts:
             parts.append(self.r("instructions.reminder"))
@@ -405,25 +423,27 @@ class Engine:
     # AUDIO IN A SESSION
     # ==================
 
-    def _apply_origin_rule(self, turn: Turn, assignment: Assignment) -> bool:
-        """Apply config audio_origin for the task type this clip answers (the
-        worker could only apply the global rule). True if it's rejected (e.g.
-        forwarded or uploaded, except in free_speech)."""
+    def _apply_task_rules(self, turn: Turn, assignment: Assignment) -> bool:
+        """Apply config audio_origin and the length flag for the task type this clip
+        answers (the worker could only apply the defaults). True if the origin rule
+        rejects it (e.g. forwarded or uploaded, except in free_speech)."""
         recording = turn.recording
         if recording is None or recording.status != "stored":
             return False
         apply_audio_origin(recording, recording.audio_origin, assignment.prompt_type, self.config)
+        apply_length_flag(recording, assignment.prompt_type, self.config)
         return self.config.audio_policy(recording.audio_origin, assignment.prompt_type) == "reject"
 
-    def _problem(self, recording: Recording | None) -> str | None:
+    def _problem(self, recording: Recording | None, task_type: str) -> str | None:
         duration = recording.duration_s if recording is not None else None
         if recording is None or recording.status != "stored" or not duration or duration < EMPTY_AUDIO_SECONDS:
             return "empty_audio"
         if recording.duplicate_of_recording_id is not None:
             return "duplicate"
-        if duration < self.config.clip_seconds.min:
+        limits = self.config.clip_limits
+        if duration < limits.min_seconds:
             return "too_short"
-        if duration > self.config.clip_seconds.max:
+        if duration > limits.max_seconds(task_type, recording.audio_origin):
             return "too_long"
         if self.config.clip_checks.problem(recording.active_seconds, duration) == "no_speech":
             return "no_speech"
@@ -450,17 +470,18 @@ class Engine:
                 end_session(self.db, stale.id, "abandoned", self.now)
             return self.offer(turn)
 
-        if self._apply_origin_rule(turn, assignment):
+        if self._apply_task_rules(turn, assignment):
             # e.g. forwarded or uploaded: never used. The prompt stays open, and it
             # doesn't use up a retake. The reply says which ("forwarded" would be wrong for a file).
             record_failed_attempt(self.db, assignment.id, turn.recording.id, "not_recorded")
             key = "problems.uploaded_audio_file" if turn.recording.audio_origin == "uploaded" else "problems.not_recorded"
             return self.repeat_prompt(turn, assignment, self.r(key))
 
-        problem = self._problem(turn.recording)
+        problem = self._problem(turn.recording, assignment.prompt_type)
         values = self._values(
             turn.participant,
             duration=f"{(turn.recording.duration_s or 0) if turn.recording else 0:.0f}",
+            **self._length_values(assignment.prompt_type, turn.recording.audio_origin if turn.recording else None),
         )
         if problem == "duplicate":
             return self.repeat_prompt(turn, assignment, self.r("problems.duplicate", **values))

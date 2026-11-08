@@ -86,6 +86,7 @@ instructions:
     4. Speak clearly, at your normal pace.
     5. Wait one second after you finish before letting go.
     6. For sentences, pictures and questions, always record a new voice note. Don't forward one or attach an audio file.
+    7. Aim for about 15 to 30 seconds per voice note. A little longer is fine.
   sentence: |
     For each sentence:
     • Read the whole sentence exactly as written.
@@ -95,21 +96,21 @@ instructions:
     For each picture:
     • Describe what you see: the people, places and objects, and what is happening.
     • Speak in Chichewa, in your own words.
-    • Talk for about {min_seconds} to {max_seconds} seconds.
+    • Talk for about 15 to 30 seconds, and no more than {max_length}.
   conversation_starter: |
     For each question:
     • Answer in your own words, as if talking to a friend.
     • Speak in Chichewa.
-    • Talk for about {min_seconds} to {max_seconds} seconds.
+    • Talk for about 15 to 30 seconds, and no more than {max_length}.
     • Don't mention private details such as full names, addresses or phone numbers.
   free_speech: |
     For each voice note:
     • Talk about anything you like: your day, your home area, a story, something you enjoy.
     • Speak naturally in Chichewa, as if talking to a friend.
-    • Talk for about {min_seconds} to {max_seconds} seconds.
+    • Aim for 15 to 30 seconds; a voice note can be up to {max_length}.
     • Press and hold the microphone button while you speak.
     • One topic per voice note is fine.
-    • You can also forward an older voice note of your own, if it's only your voice. We check that it's you.
+    • You can also forward an older voice note of your own (up to {max_length_older}), if it's only your voice. We check that it's you.
     • Don't mention private details such as full names, addresses or phone numbers.
   reminder: "Reply *INSTRUCTIONS* at any time to see these tips again."
 
@@ -189,7 +190,7 @@ problems:
   uploaded_audio_file: "That looks like an audio file rather than a voice note. Please record directly in WhatsApp."
   empty_audio: "That voice note seems to be empty. Please record it again."
   too_short: "That recording was very short ({duration} seconds). Please record it again, aiming for at least {min_seconds} seconds."
-  too_long: "That recording was {duration} seconds, longer than the {max_seconds}-second limit. Please record it again, a little shorter."
+  too_long: "That recording was {duration} seconds. Please record it again and keep it under {max_length}."
   # Very little sound in the clip (config clip_checks); the prompt is sent again after it.
   no_speech:
     - "We couldn't hear you. Please hold the microphone button and speak clearly, close to the phone."

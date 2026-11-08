@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 # qc_reason of clips the arrival checks rejected: never worth transcribing.
 ARRIVAL_REJECTIONS = ("empty", "too_short", "too_long", "no_speech", "not_recorded")
+# The deployed Modal app decodes 30 s of audio per clip (Whisper's window) and would cut
+# longer clips off. Until it has a long-form path (being tested in scripts/modal_asr_compare.py),
+# longer clips are not sent; they stay untranscribed, so a later batch picks them up.
+MAX_SHORT_FORM_SECONDS = 30.0
 LOCK_KEY = "asr_batch"
 ERROR_LIMIT = 2000
 
@@ -38,6 +42,7 @@ TEST = "test participant"
 DONE = "already transcribed"
 MISSING = "WAV file missing"
 OVER_LIMIT = "over --limit"
+LONG = "over 30 s (waiting for long-form ASR)"
 
 
 class BatchLocked(RuntimeError):
@@ -96,7 +101,8 @@ def _local_midnight(day: date, tz: ZoneInfo) -> datetime:
 def select_clips(db: Session, filters: Filters, storage: FileStorage, tz: ZoneInfo) -> Selection:
     """Stored recordings of registered participants with a WAV, oldest first, minus:
     clips rejected at arrival, duplicates, test participants (unless
-    include_test), ones this model has transcribed (unless force) and missing files.
+    include_test), ones this model has transcribed (unless force), clips over
+    MAX_SHORT_FORM_SECONDS (always, even with force) and missing files.
     --since/--until are local dates (tz) of when the recording was stored.
     """
     query = (
@@ -141,6 +147,8 @@ def select_clips(db: Session, filters: Filters, storage: FileStorage, tz: ZoneIn
             reason = TEST
         elif row.id in done:
             reason = DONE
+        elif (row.duration_s or 0) > MAX_SHORT_FORM_SECONDS:
+            reason = LONG
         elif filters.limit is not None and len(selection.clips) >= filters.limit:
             reason = OVER_LIMIT
         elif not storage.exists(row.wav_path):

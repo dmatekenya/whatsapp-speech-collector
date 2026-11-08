@@ -13,6 +13,7 @@ import scripts.asr_batch as cli
 from src.asr.batch import (
     DONE,
     DUPLICATE,
+    LONG,
     MISSING,
     OVER_LIMIT,
     REJECTED,
@@ -272,6 +273,35 @@ def test_forwarded_or_uploaded_clips_are_sent_only_when_accepted(people: None, s
     assert chosen == [free_speech] and excluded == {REJECTED: 1}
 
 
+def test_clips_over_30_seconds_wait_for_long_form_asr(people: None, storage: LocalFileStorage) -> None:
+    at_limit = add_recording(storage, duration_s=30.0)
+    add_recording(storage, duration_s=30.5, length_flag="long_clip")
+    add_recording(storage, duration_s=119, audio_origin="forwarded", qc_status="needs_review", qc_reason="speaker_check_pending")
+
+    for force in (False, True):  # never sent, so never cut off at 30 s
+        chosen, excluded, _ = selected(storage, force=force)
+        assert chosen == [at_limit] and excluded == {LONG: 2}
+    # Not transcribed, so a later batch (once long-form ASR is enabled) picks them up.
+    assert transcripts() == []
+
+
+def test_compare_script_uses_long_form_only_over_30_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    import modal
+
+    monkeypatch.setattr(modal, "is_local", lambda: False)  # don't read HF_TOKEN from .env on import
+    from scripts.modal_asr_compare import LONG_FORM_SECONDS, whisper_call_kwargs
+
+    fe, gen, long_form = whisper_call_kwargs(LONG_FORM_SECONDS)
+    assert not long_form and "truncation" not in fe and "padding" not in fe  # cut/padded to 30 s as before
+    assert gen == {"return_dict_in_generate": True, "output_scores": True}
+
+    for seconds in (30.01, 60, 120):
+        fe, gen, long_form = whisper_call_kwargs(seconds)
+        assert long_form
+        assert fe == {"sampling_rate": 16000, "return_attention_mask": True, "return_tensors": "pt", "truncation": False, "padding": "longest"}
+        assert gen == {"return_timestamps": True}
+
+
 def test_selection_filters(people: None, storage: LocalFileStorage) -> None:
     early = add_recording(storage, stored_at=local(2026, 11, 1, 23, 50))
     p2 = add_recording(storage, participant_id="P0002", stored_at=local(2026, 11, 2, 0, 10))
@@ -456,14 +486,14 @@ def test_a_change_of_runs_per_day_applies_at_the_next_check(cli_env, storage: Lo
 
 
 def test_dry_run_saves_nothing(cli_env, storage: LocalFileStorage, capsys: pytest.CaptureFixture) -> None:
-    add_recording(storage, participant_id="P0006", duration_s=90)
+    add_recording(storage, participant_id="P0006", duration_s=30)
     fake = FakeTranscriber()
 
     assert cli.main(["--dry-run"], fake) == 0
     assert "Selected 0 clip(s)" in capsys.readouterr().out
     assert cli.main(["--dry-run", "--include-test", "--participant", "P0006"], fake) == 0
     out = capsys.readouterr().out
-    assert "Selected 1 clip(s) for whisper_b: 1.5 audio minutes" in out
+    assert "Selected 1 clip(s) for whisper_b: 0.5 audio minutes" in out
     assert fake.calls == [] and batches() == [] and transcripts() == []
 
 

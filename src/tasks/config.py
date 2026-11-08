@@ -25,17 +25,74 @@ def round_half(minutes: float) -> float:
     return math.floor(minutes * 2 + 0.5) / 2
 
 
-class ClipSeconds(BaseModel):
+LengthFlag = Literal["long_sentence", "long_clip"]
+LENGTH_FLAGS: tuple[str, ...] = ("long_sentence", "long_clip")
+# Audio origins that may have their own, higher maximum (max_forwarded_or_uploaded).
+OLDER_AUDIO_ORIGINS = ("forwarded", "uploaded")
+
+
+class ClipLimit(BaseModel):
+    """clip_limits.default or clip_limits.task_types.<type>.
+
+    Longer than flag_over: accepted and counted in full, but recordings.length_flag
+    is set (flag), marking it to be split before training. Longer than max:
+    rejected (too_long, retake). max_forwarded_or_uploaded: a higher max for
+    forwarded and uploaded audio (older voice notes; only where they're accepted).
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    min: float = Field(gt=0)
+    flag_over: float = Field(gt=0)
     max: float = Field(gt=0)
+    flag: LengthFlag = "long_clip"
+    max_forwarded_or_uploaded: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
-    def _ordered(self) -> "ClipSeconds":
-        if self.min > self.max:
-            raise ValueError("clip_seconds: min must not exceed max")
+    def _ordered(self) -> "ClipLimit":
+        if self.flag_over > self.max:
+            raise ValueError("flag_over must not exceed max")
+        if self.max_forwarded_or_uploaded is not None and self.max_forwarded_or_uploaded < self.max:
+            raise ValueError("max_forwarded_or_uploaded must not be below max")
         return self
+
+    def max_for(self, origin: str | None) -> float:
+        if origin in OLDER_AUDIO_ORIGINS and self.max_forwarded_or_uploaded is not None:
+            return self.max_forwarded_or_uploaded
+        return self.max
+
+
+class ClipLimits(BaseModel):
+    """clip_limits: how long a clip may be, per task type (default outside a
+    session and for types not listed). min_seconds is the same for all."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    min_seconds: float = Field(gt=0)
+    default: ClipLimit
+    task_types: dict[str, ClipLimit] = {}
+
+    @model_validator(mode="after")
+    def _min_below_flags(self) -> "ClipLimits":
+        for name, limit in [("default", self.default), *((f"task_types.{t}", v) for t, v in self.task_types.items())]:
+            if self.min_seconds >= limit.flag_over:
+                raise ValueError(f"{name}: min_seconds must be below flag_over")
+        if self.default.flag != "long_clip":
+            raise ValueError("default: flag must be long_clip")
+        return self
+
+    def limit(self, task_type: str | None) -> ClipLimit:
+        """The task type's limits; default outside a session or for a type not listed."""
+        return self.task_types.get(task_type, self.default) if task_type else self.default
+
+    def max_seconds(self, task_type: str | None, origin: str | None) -> float:
+        return self.limit(task_type).max_for(origin)
+
+    def length_flag(self, duration_s: float | None, task_type: str | None) -> str | None:
+        """long_sentence / long_clip when the clip is longer than flag_over, else None."""
+        limit = self.limit(task_type)
+        if duration_s is None or duration_s <= limit.flag_over:
+            return None
+        return limit.flag
 
 
 ClipProblem = Literal["no_speech", "low_speech"]
@@ -47,9 +104,11 @@ class ClipChecks(BaseModel):
     The worker measures each voice note on its 16 kHz WAV (src/audio/levels.py):
     active_seconds is the time in frame_ms frames louder than active_dbfs. The
     conversation engine applies the rules after the duration check:
-    active_seconds below min_active_seconds is no_speech (rejected, retake);
-    otherwise an active share of the clip below min_active_ratio is low_speech
-    (accepted, flagged for review).
+    active_seconds below min_active_seconds is no_speech (rejected, retake); so
+    is a clip longer than long_clip_seconds whose active share is below
+    long_clip_min_active_ratio (a long clip that is mostly silence would
+    otherwise count in full); otherwise an active share of the clip below
+    min_active_ratio is low_speech (accepted, flagged for review).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -58,6 +117,8 @@ class ClipChecks(BaseModel):
     active_dbfs: float = Field(default=-45.0, ge=-120, lt=0)
     min_active_seconds: float = Field(default=1.5, ge=0)
     min_active_ratio: float = Field(default=0.20, ge=0, le=1)
+    long_clip_seconds: float = Field(default=30.0, gt=0)
+    long_clip_min_active_ratio: float = Field(default=0.20, ge=0, le=1)
 
     def problem(self, active_seconds: float | None, duration_s: float | None) -> ClipProblem | None:
         """None when the clip wasn't measured (e.g. recordings from before the check)."""
@@ -65,7 +126,10 @@ class ClipChecks(BaseModel):
             return None
         if active_seconds < self.min_active_seconds:
             return "no_speech"
-        if duration_s and active_seconds / duration_s < self.min_active_ratio:
+        ratio = active_seconds / duration_s if duration_s else None
+        if ratio is not None and duration_s > self.long_clip_seconds and ratio < self.long_clip_min_active_ratio:
+            return "no_speech"
+        if ratio is not None and ratio < self.min_active_ratio:
             return "low_speech"
         return None
 
@@ -180,7 +244,7 @@ class CollectionConfig(BaseModel):
     assignment_expiry_hours: float = Field(gt=0)
     max_retakes_per_prompt: int = Field(ge=0)
     targets_minutes: Targets
-    clip_seconds: ClipSeconds
+    clip_limits: ClipLimits
     clip_checks: ClipChecks = ClipChecks()
     # After this long without a message from the participant, their next
     # message starts afresh (welcome back). None: same as assignment_expiry_hours.
@@ -193,6 +257,11 @@ class CollectionConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _not_the_old_format(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "clip_seconds" in data:
+            raise ValueError(
+                "clip_seconds is replaced by clip_limits (min_seconds, default and per task type"
+                " flag_over / max); see config/assignment_settings.yaml"
+            )
         if isinstance(data, dict) and "speakers_per_prompt" in data:
             raise ValueError(
                 "speakers_per_prompt is now set per task type: replace it with a task_types section, e.g."
@@ -215,6 +284,13 @@ class CollectionConfig(BaseModel):
                 "targets_minutes.split must list exactly the task types in task_types: "
                 + "; ".join(problems)
             )
+        return self
+
+    @model_validator(mode="after")
+    def _clip_limits_for_known_types(self) -> "CollectionConfig":
+        unknown = sorted(set(self.clip_limits.task_types) - set(self.task_types))
+        if unknown:
+            raise ValueError(f"clip_limits.task_types: not in task_types {unknown}")
         return self
 
     @property

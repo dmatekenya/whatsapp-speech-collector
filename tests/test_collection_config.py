@@ -1,5 +1,6 @@
 """Recording targets in config/assignment_settings.yaml: per_participant x split."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ def settings(per_participant: float = 10, split: dict | None = None, **overrides
             "per_participant": per_participant,
             "split": split if split is not None else {"sentence": 0.4, "image": 0.3, "conversation_starter": 0.3},
         },
-        "clip_seconds": {"min": 5, "max": 30},
+        "clip_limits": {"min_seconds": 5, "default": {"flag_over": 30, "max": 30}},
     }
     values.update(overrides)
     return values
@@ -287,7 +288,18 @@ def test_applying_the_rule_again_with_the_task_type_replaces_the_workers_rule() 
 def test_the_real_config_has_the_four_types_and_rules() -> None:
     cfg = load_collection_config(DEFAULT_PATH)
     assert cfg.default_targets == {"sentence": 6.0, "image": 5.0, "conversation_starter": 5.0, "free_speech": 4.0}
-    assert cfg.clip_seconds.max == 29
+    limits = cfg.clip_limits
+    assert limits.min_seconds == 5
+    assert {t: limits.max_seconds(t, "recorded") for t in (*cfg.task_types, None)} == {
+        "sentence": 45, "image": 60, "conversation_starter": 60, "free_speech": 60, None: 60,
+    }  # fmt: skip
+    assert limits.max_seconds("free_speech", "forwarded") == limits.max_seconds("free_speech", "uploaded") == 120
+    assert limits.max_seconds("sentence", "forwarded") == 45  # only free speech has a higher max
+    assert [limits.length_flag(31, t) for t in (*cfg.task_types, None)] == [
+        "long_sentence", "long_clip", "long_clip", "long_clip", "long_clip",
+    ]  # fmt: skip
+    assert limits.length_flag(30, "sentence") is None
+    assert (cfg.clip_checks.long_clip_seconds, cfg.clip_checks.long_clip_min_active_ratio) == (30, 0.20)
     assert cfg.audio_origin.forwarded == "reject" and cfg.audio_origin.uploaded == "reject"
     # Forwarded voice notes and audio files count (flagged) in free speech only.
     for origin in ("forwarded", "uploaded"):
@@ -322,3 +334,83 @@ def test_speech_type_is_required() -> None:
 def test_the_real_config_is_30_percent_scripted() -> None:
     cfg = load_collection_config(DEFAULT_PATH)
     assert cfg.by_speech_type(cfg.default_targets) == {"scripted": 6.0, "spontaneous": 14.0}
+
+
+# ===========
+# CLIP LIMITS
+# ===========
+LIMITS = {
+    "min_seconds": 5,
+    "default": {"flag_over": 30, "max": 60},
+    "task_types": {
+        "sentence": {"flag_over": 30, "max": 45, "flag": "long_sentence"},
+        "image": {"flag_over": 30, "max": 60},
+    },
+}
+
+
+def with_limits(**changes: object) -> dict:
+    limits = yaml.safe_load(yaml.safe_dump(LIMITS))  # a deep copy
+    for path, value in changes.items():
+        *parents, last = path.split("__")
+        target = limits
+        for part in parents:
+            target = target[part]
+        target[last] = value
+    return settings(clip_limits=limits)
+
+
+def test_clip_limits_per_type_with_default_for_the_rest() -> None:
+    limits = CollectionConfig.model_validate(with_limits()).clip_limits
+    assert limits.max_seconds("sentence", "recorded") == 45
+    assert limits.max_seconds("conversation_starter", "recorded") == 60  # not listed: default
+    assert limits.max_seconds(None, "forwarded") == 60
+    assert limits.length_flag(46, "sentence") == "long_sentence"
+    assert limits.length_flag(31, "conversation_starter") == "long_clip"
+    assert limits.length_flag(None, "sentence") is None
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"min_seconds": 0}, "clip_limits.min_seconds"),
+        ({"default__max": -1}, "clip_limits.default.max"),
+        ({"min_seconds": 30}, "default: min_seconds must be below flag_over"),
+        ({"task_types__sentence__flag_over": 50}, "flag_over must not exceed max"),
+        ({"task_types__image__max_forwarded_or_uploaded": 50}, "max_forwarded_or_uploaded must not be below max"),
+        ({"task_types__sentence__flag": "very_long"}, "clip_limits.task_types.sentence.flag"),
+        ({"task_types__sentence__maximum": 45}, "clip_limits.task_types.sentence.maximum"),
+        ({"task_types__video": {"flag_over": 30, "max": 60}}, "clip_limits.task_types: not in task_types ['video']"),
+        ({"default__flag": "long_sentence"}, "default: flag must be long_clip"),
+    ],
+)
+def test_bad_clip_limits_are_refused(tmp_path: Path, changes: dict, message: str) -> None:
+    path = tmp_path / "settings.yaml"
+    path.write_text(yaml.safe_dump(with_limits(**changes)))
+    with pytest.raises(CollectionConfigError, match=re.escape(message)):
+        load_collection_config(path)
+
+
+def test_old_clip_seconds_gets_a_clear_message() -> None:
+    old = settings()
+    del old["clip_limits"]
+    old["clip_seconds"] = {"min": 5, "max": 29}
+    with pytest.raises(ValidationError, match="clip_seconds is replaced by clip_limits"):
+        CollectionConfig.model_validate(old)
+
+
+@pytest.mark.parametrize(
+    ("active", "duration", "expected"),
+    [
+        (1.4, 10, "no_speech"),  # under min_active_seconds
+        (1.6, 10, "low_speech"),  # 16% of a short clip: accepted, flagged
+        (5.9, 30, "low_speech"),  # 30 s is not over long_clip_seconds
+        (6.1, 31, "no_speech"),  # long and under 20% active
+        (23, 119, "no_speech"),
+        (7, 31, None),  # long, 23% active
+        (25, 120, None),
+    ],
+)
+def test_long_mostly_silent_clips_are_no_speech(active: float, duration: float, expected: str | None) -> None:
+    checks = CollectionConfig.model_validate(settings()).clip_checks
+    assert checks.problem(active, duration) == expected

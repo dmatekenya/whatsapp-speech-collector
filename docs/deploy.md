@@ -377,6 +377,16 @@ Redeploy after changing anything in `scripts/modal_asr_app.py`: the models or th
 GPU types, batch size, timeouts or package pins. Changes to `config/asr_batch.yaml` or the
 droplet's code don't need a redeploy.
 
+**Clips over 30 s** (allowed since 2026-11-07, see `clip_limits` in
+`config/assignment_settings.yaml`) are not sent yet: the batch app decodes 30 s per clip and would
+cut them off. `--dry-run` counts them as "over 30 s (waiting for long-form ASR)". They stay
+untranscribed and a later batch picks them up once the app has long-form decoding. That is being
+tested first with the compare script, which needs no deploy (`modal run` starts a temporary app):
+
+```bash
+uv run modal run scripts/modal_asr_compare.py --wav <a WAV over 30 s> --models whisper_b,whisper_v1
+```
+
 ### Run a batch by hand
 
 **On the droplet**, look first, then run:

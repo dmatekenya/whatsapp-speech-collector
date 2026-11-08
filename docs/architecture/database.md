@@ -106,7 +106,8 @@ and rejected views are produced by export.
 | `status` | text | Storage status: `pending`, `stored`, `failed` |
 | `error` | text, nullable | |
 | `qc_status` | text, indexed | Whether the clip is usable: `pending`, `accepted`, `rejected`, `needs_review`. Rejected clips never count toward minutes; `needs_review` ones do |
-| `qc_reason` | text, nullable | `too_short`, `too_long`, `empty`, `no_speech` (failed attempts, rejected, set by the conversation engine); `low_speech` (accepted but mostly silence, `needs_review`); `not_recorded` (forwarded or uploaded audio outside free speech, rejected); `speaker_check_pending` (forwarded or uploaded audio in free speech, `needs_review`; also uploads accepted in any task type before 2026-11-07; kept if the clip is also low speech). The QC step will add e.g. `duplicate`, `wrong_sentence` |
+| `qc_reason` | text, nullable | `too_short`, `too_long` (limits per task type and origin, config `clip_limits`), `empty`, `no_speech` (under 1.5 s of active audio, or over 30 s with under 20% active) (failed attempts, rejected, set by the conversation engine); `low_speech` (accepted but mostly silence, `needs_review`); `not_recorded` (forwarded or uploaded audio outside free speech, rejected); `speaker_check_pending` (forwarded or uploaded audio in free speech, `needs_review`; also uploads accepted in any task type before 2026-11-07; kept if the clip is also low speech). The QC step will add e.g. `duplicate`, `wrong_sentence` |
+| `length_flag` | text, nullable | `long_sentence` or `long_clip`: longer than `flag_over` for its task type in `config/assignment_settings.yaml` (`clip_limits`; the default limits outside a session). Kept and counted in full; information for preprocessing (split before training), never a review flag (`qc_status` is unchanged). Null within the limit. Added by migration `f3a7c2d9e816`; older rows null (none was over 29 s) |
 | `created_at`, `updated_at` | timestamptz | |
 
 ### participants
@@ -269,6 +270,7 @@ constraint: a forced re-run adds a row; the latest per source and model is by `c
 | `model_key`, `model_repo`, `model_revision` | text, nullable | ASR only: the model key, Hugging Face repo and commit SHA |
 | `text` | text | As the model returned it (stripped, not normalised). Can be empty |
 | `avg_logprob` | float, nullable | Mean log-probability of the generated tokens (ASR only) |
+| `long_form` | bool, nullable | ASR only: decoded with Whisper long-form generation (audio over 30 s). Null for older rows and other sources. Added by migration `f3a7c2d9e816` |
 | `batch_id` | FK → asr_batches, nullable, indexed | The batch that wrote it |
 | `created_at` | timestamptz | |
 

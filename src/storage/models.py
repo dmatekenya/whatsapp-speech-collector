@@ -33,6 +33,8 @@ CHANNELS = ("twilio", "meta")
 FORWARDED_VALUES = ("no", "forwarded", "frequently_forwarded")
 # Where a voice note came from (from Meta's voice and forwarded flags; Twilio: unknown).
 AUDIO_ORIGINS = ("recorded", "forwarded", "uploaded", "unknown")
+# Longer than the task type's flag_over (config clip_limits): kept and counted, split before training.
+LENGTH_FLAGS = ("long_sentence", "long_clip")
 ASR_BATCH_STATUSES = ("running", "completed", "partial", "failed", "interrupted")
 ASR_BATCH_TRIGGERS = ("scheduled", "manual")
 # asr: a model's output (written by the ASR batch); human and prompt come later.
@@ -195,6 +197,7 @@ class Recording(Base):
         CheckConstraint(_in_check("qc_status", QC_STATUSES), name="ck_recordings_qc_status"),
         CheckConstraint(_in_check("forwarded", FORWARDED_VALUES), name="ck_recordings_forwarded"),
         CheckConstraint(_in_check("audio_origin", AUDIO_ORIGINS), name="ck_recordings_audio_origin"),
+        CheckConstraint(_in_check("length_flag", LENGTH_FLAGS), name="ck_recordings_length_flag"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -253,6 +256,10 @@ class Recording(Base):
     # the QC step will set the rest.
     qc_status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending", index=True)
     qc_reason: Mapped[str | None] = mapped_column(Text)  # e.g. too_short, no_speech, low_speech
+    # long_sentence | long_clip: longer than flag_over in config clip_limits (by task type;
+    # default outside a session). Information only, never a review flag: such clips are split
+    # before training. None: within flag_over (or not measured).
+    length_flag: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -472,6 +479,9 @@ class Transcript(Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     # Mean log-probability of the generated tokens (ASR only).
     avg_logprob: Mapped[float | None] = mapped_column(Float)
+    # ASR only: True if decoded with Whisper long-form generation (audio over 30 s);
+    # None for older rows and other sources.
+    long_form: Mapped[bool | None] = mapped_column(Boolean)
     batch_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("asr_batches.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

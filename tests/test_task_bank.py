@@ -54,7 +54,7 @@ def config(**overrides: object) -> CollectionConfig:
         "assignment_expiry_hours": 24,
         "max_retakes_per_prompt": 2,
         "targets_minutes": {"per_participant": 10, "split": {"sentence": 0.4, "image": 0.3, "conversation_starter": 0.3}},
-        "clip_seconds": {"min": 5, "max": 30},
+        "clip_limits": {"min_seconds": 5, "default": {"flag_over": 30, "max": 30}},
     }
     if "speakers_per_prompt" in overrides:  # shorthand: prompted types with these speakers
         values["task_types"] = prompted(**overrides.pop("speakers_per_prompt"))

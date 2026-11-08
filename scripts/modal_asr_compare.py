@@ -9,18 +9,29 @@ evaluation code:
   argmax over logits, processor.batch_decode().
 CER/WER use a copy of src/data_utils/text_utils.py::normalize_transcript on both sides.
 
+Whisper clips over 30 s (LONG_FORM_SECONDS) use Whisper's own long-form generation instead of
+being cut at 30 s: the feature extractor is called with truncation=False, padding="longest",
+return_attention_mask=True, and generate() decodes the audio window by window with the same
+Shona/transcribe settings, greedy. transformers 4.46.3 requires return_timestamps=True for this
+(both models' generation_config has return_timestamps=False, and generate() refuses more than
+3000 feature frames without it); the timestamp tokens are removed by the tokenizer's decode. No
+log-probability for these clips (confidence is blank): long-form only returns scores with
+return_segments=True. Each row says whether it went through long-form. Under test: the ASR
+batch app (scripts/modal_asr_app.py) gets this path only once the transcripts look right.
+
 Usage (from the repo root):
     uv run modal run scripts/modal_asr_compare.py --wav data/audio/P0006/P0006_R000022.wav
     uv run modal run scripts/modal_asr_compare.py --wav data/audio/P0006/P0006_R000022.wav --reference "..."
     uv run modal run scripts/modal_asr_compare.py --wav data/audio/P0006 --limit 10
     uv run modal run scripts/modal_asr_compare.py --manifest data/review/asr_sample.csv   # columns: path,reference
     uv run modal run scripts/modal_asr_compare.py --wav <...> --models whisper_b,mms
+    uv run modal run scripts/modal_asr_compare.py --wav <a WAV over 30 s> --models whisper_b,whisper_v1   # long-form
 
 Only HF_TOKEN is read from the local .env and sent to Modal.
 """
 
 # =======
-# Imports
+# IMPORTS
 # =======
 import csv
 from pathlib import Path
@@ -28,7 +39,7 @@ from pathlib import Path
 import modal
 
 # ======
-# Models
+# MODELS
 # ======
 # kind: "whisper" or "mms". revision: a commit hash or branch (None = main).
 MODELS = {
@@ -58,9 +69,11 @@ LANGUAGE = "shona"
 TASK = "transcribe"
 WHISPER_DTYPE = "float16"                  # "float32" matches training exactly
 GPU = ["L4", "A10G", "T4"]                 # first free GPU type wins
+SAMPLE_RATE = 16000
+LONG_FORM_SECONDS = 30.0                   # Whisper's window: longer clips use long-form generation
 
 # ===========
-# Modal Setup
+# MODAL SETUP
 # ===========
 app = modal.App("tiyankhuleni-asr-compare")
 
@@ -96,7 +109,7 @@ hf_secret = modal.Secret.from_dict({"HF_TOKEN": _hf_token_from_dotenv()})
 
 
 # =============
-# Normalisation
+# NORMALISATION
 # =============
 # Copy of src/data_utils/text_utils.py::normalize_transcript (default settings).
 _APOS = "'"
@@ -120,8 +133,23 @@ def normalize_transcript(text: str) -> str:
 
 
 # ==========
-# Transcribe
+# TRANSCRIBE
 # ==========
+def whisper_call_kwargs(audio_seconds: float) -> tuple[dict, dict, bool]:
+    """(feature extractor kwargs, generate() kwargs, long_form) for one Whisper clip.
+
+    Up to LONG_FORM_SECONDS: as before (the feature extractor pads or cuts to 30 s, and
+    generate() returns scores for the confidence). Longer: no truncation, padded to the clip
+    itself, attention mask, and long-form generate(), which needs return_timestamps=True in
+    transformers 4.46.3 (these models' generation_config sets it to False).
+    """
+    fe = {"sampling_rate": SAMPLE_RATE, "return_attention_mask": True, "return_tensors": "pt"}
+    if audio_seconds <= LONG_FORM_SECONDS:
+        return fe, {"return_dict_in_generate": True, "output_scores": True}, False
+    fe.update(truncation=False, padding="longest")
+    return fe, {"return_timestamps": True}, True
+
+
 @app.function(gpu=GPU, image=image, volumes={"/cache": model_cache}, secrets=[hf_secret], timeout=1800)
 def transcribe(model_key: str, clips: list) -> dict:
     """clips: list of (name, wav_bytes, reference). Returns timings and per-clip results."""
@@ -183,18 +211,23 @@ def transcribe(model_key: str, clips: list) -> dict:
 
         torch.cuda.synchronize()
         start = time.time()
+        long_form = False
         if spec["kind"] == "whisper":
-            processed = processor.feature_extractor(
-                audio, sampling_rate=16000, return_attention_mask=True, return_tensors="pt"
-            )
+            fe_kwargs, gen_kwargs, long_form = whisper_call_kwargs(len(audio) / SAMPLE_RATE)
+            processed = processor.feature_extractor(audio, **fe_kwargs)
             gen = {"input_features": processed.input_features.to("cuda", dtype=dtype)}
             if "attention_mask" in processed:
                 gen["attention_mask"] = processed.attention_mask.to("cuda")
             with torch.no_grad():
-                out = model.generate(**gen, return_dict_in_generate=True, output_scores=True)
-            text = processor.tokenizer.batch_decode(out.sequences, skip_special_tokens=True)[0].strip()
-            scores = model.compute_transition_scores(out.sequences, out.scores, normalize_logits=True)
-            confidence = float(scores[0].float().mean().item()) if scores.numel() else float("nan")
+                out = model.generate(**gen, **gen_kwargs)
+            if long_form:
+                # A plain tensor of token ids (timestamps included); decode drops the timestamps.
+                text = processor.tokenizer.batch_decode(out, skip_special_tokens=True)[0].strip()
+                confidence = None
+            else:
+                text = processor.tokenizer.batch_decode(out.sequences, skip_special_tokens=True)[0].strip()
+                scores = model.compute_transition_scores(out.sequences, out.scores, normalize_logits=True)
+                confidence = float(scores[0].float().mean().item()) if scores.numel() else float("nan")
         else:
             inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
             with torch.no_grad():
@@ -213,7 +246,8 @@ def transcribe(model_key: str, clips: list) -> dict:
             "clip": name,
             "audio_seconds": round(len(audio) / 16000, 2),
             "seconds": round(seconds, 3),
-            "confidence": round(confidence, 3),
+            "confidence": None if confidence is None else round(confidence, 3),
+            "long_form": long_form,
             "text": text,
         }
         if reference:
@@ -234,7 +268,7 @@ def transcribe(model_key: str, clips: list) -> dict:
 
 
 # ===========
-# Entry Point
+# ENTRY POINT
 # ===========
 def _collect_clips(wav: str, reference: str, manifest: str, limit: int) -> list:
     if manifest:
@@ -291,6 +325,8 @@ def main(wav: str = "", reference: str = "", manifest: str = "", models: str = "
         for key, res in ok.items():
             r = res["rows"][i]
             extra = f"  [CER {r['cer']}]" if r.get("cer") is not None else ""
+            if r.get("long_form"):
+                extra += f"  [long-form, {r['audio_seconds']} s]"
             print(f"  {key:<12}{r['text']}{extra}")
 
     for key, res in ok.items():

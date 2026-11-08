@@ -53,7 +53,9 @@ def _progress_values(task_types: list[str]) -> set[str]:
 def required_keys(task_types: Iterable[str], unprompted: Iterable[str] = ()) -> dict[str, set[str]]:
     """Every key the engine renders, with the placeholders it supplies for it."""
     task_types, unprompted = list(task_types), set(unprompted)
-    durations = {"duration", "min_seconds", "max_seconds"}
+    # max_length: the clip limit as text ("45 seconds", "1 minute"), for the task type (and
+    # origin, in a retake); max_length_older: for forwarded voice notes and audio files.
+    durations = {"duration", "min_seconds", "max_length", "max_length_older"}
     totals = {"first_name", "total_done", "total_target"}
     keys: dict[str, set[str]] = {
         "welcome.first_time": {"first_name"},

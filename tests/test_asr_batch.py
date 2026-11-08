@@ -13,7 +13,6 @@ import scripts.asr_batch as cli
 from src.asr.batch import (
     DONE,
     DUPLICATE,
-    LONG,
     MISSING,
     OVER_LIMIT,
     REJECTED,
@@ -273,23 +272,27 @@ def test_forwarded_or_uploaded_clips_are_sent_only_when_accepted(people: None, s
     assert chosen == [free_speech] and excluded == {REJECTED: 1}
 
 
-def test_clips_over_30_seconds_wait_for_long_form_asr(people: None, storage: LocalFileStorage) -> None:
+def test_clips_over_30_seconds_are_sent(people: None, storage: LocalFileStorage) -> None:
     at_limit = add_recording(storage, duration_s=30.0)
-    add_recording(storage, duration_s=30.5, length_flag="long_clip")
-    add_recording(storage, duration_s=119, audio_origin="forwarded", qc_status="needs_review", qc_reason="speaker_check_pending")
+    long = add_recording(storage, duration_s=30.5, length_flag="long_clip")
+    older = add_recording(storage, duration_s=119, audio_origin="forwarded", qc_status="needs_review", qc_reason="speaker_check_pending")
 
-    for force in (False, True):  # never sent, so never cut off at 30 s
-        chosen, excluded, _ = selected(storage, force=force)
-        assert chosen == [at_limit] and excluded == {LONG: 2}
-    # Not transcribed, so a later batch (once long-form ASR is enabled) picks them up.
-    assert transcripts() == []
+    chosen, excluded, _ = selected(storage)
+    assert chosen == [at_limit, long, older] and excluded == {}
 
 
-def test_compare_script_uses_long_form_only_over_30_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+def compare_script(monkeypatch: pytest.MonkeyPatch):
     import modal
 
     monkeypatch.setattr(modal, "is_local", lambda: False)  # don't read HF_TOKEN from .env on import
-    from scripts.modal_asr_compare import LONG_FORM_SECONDS, whisper_call_kwargs
+    import scripts.modal_asr_compare
+
+    return scripts.modal_asr_compare
+
+
+def test_compare_script_uses_long_form_only_over_30_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    script = compare_script(monkeypatch)
+    LONG_FORM_SECONDS, whisper_call_kwargs = script.LONG_FORM_SECONDS, script.whisper_call_kwargs
 
     fe, gen, long_form = whisper_call_kwargs(LONG_FORM_SECONDS)
     assert not long_form and "truncation" not in fe and "padding" not in fe  # cut/padded to 30 s as before
@@ -299,7 +302,25 @@ def test_compare_script_uses_long_form_only_over_30_seconds(monkeypatch: pytest.
         fe, gen, long_form = whisper_call_kwargs(seconds)
         assert long_form
         assert fe == {"sampling_rate": 16000, "return_attention_mask": True, "return_tensors": "pt", "truncation": False, "padding": "longest"}
-        assert gen == {"return_timestamps": True}
+        assert gen == {"return_timestamps": True, "return_segments": True}
+
+
+@pytest.mark.parametrize(
+    ("segments", "expected"),
+    [
+        # Segments decoded on their own: the boundary has no space of its own.
+        (["Ndinapita kwacha", "ndukamba kuti", "million.", "Project inayamba"], "Ndinapita kwacha ndukamba kuti million. Project inayamba"),
+        ([" Moni ", "  muli bwanji  ", "\nndili bwino\t"], "Moni muli bwanji ndili bwino"),  # any whitespace collapsed
+        (["moni", "", "  ", "bwanji"], "moni bwanji"),  # empty segments add nothing
+        (["moni"], "moni"),
+        ([], ""),
+    ],
+)
+def test_long_form_segments_are_joined_with_a_space(monkeypatch: pytest.MonkeyPatch, segments: list[str], expected: str) -> None:
+    from scripts.modal_asr_app import join_segments
+
+    assert join_segments(segments) == expected
+    assert compare_script(monkeypatch).join_segments(segments) == expected  # the compare script does the same
 
 
 def test_selection_filters(people: None, storage: LocalFileStorage) -> None:
@@ -322,10 +343,18 @@ def test_selection_filters(people: None, storage: LocalFileStorage) -> None:
 class FakeTranscriber:
     """Stands in for Modal: one result per chunk, in order."""
 
-    def __init__(self, fail_chunks: tuple[int, ...] = (), bad_clips: tuple[int, ...] = (), on_chunk=None) -> None:
+    def __init__(
+        self,
+        fail_chunks: tuple[int, ...] = (),
+        bad_clips: tuple[int, ...] = (),
+        on_chunk=None,
+        long_form: tuple[int, ...] | None = None,
+    ) -> None:
         self.fail_chunks = fail_chunks
         self.bad_clips = bad_clips
         self.on_chunk = on_chunk
+        # None: results without long_form (an app deployed before it had long-form decoding).
+        self.long_form = long_form
         self.calls: list[list[int]] = []
 
     def transcribe_chunks(self, model_key: str, chunks) -> Iterator[dict | BaseException]:
@@ -336,19 +365,23 @@ class FakeTranscriber:
             if number in self.fail_chunks:
                 yield RuntimeError("GPU container lost")
                 continue
+            clips = [
+                {
+                    "recording_id": recording_id,
+                    "text": None if recording_id in self.bad_clips else f"moni {recording_id}",
+                    "avg_logprob": None if recording_id in self.bad_clips else -0.25,
+                    "audio_seconds": len(data) / 100,
+                    "error": "audio: LibsndfileError: bad file" if recording_id in self.bad_clips else None,
+                }
+                for recording_id, data in chunk
+            ]
+            if self.long_form is not None:  # an app with long-form decoding says which clips used it
+                for clip in clips:
+                    clip["long_form"] = clip["recording_id"] in self.long_form
             yield {
                 "model": {"key": model_key, "repo": "dmatekenya/whisper-test", "revision": "abc123def456"},
                 "gpu": "NVIDIA L4",
-                "clips": [
-                    {
-                        "recording_id": recording_id,
-                        "text": None if recording_id in self.bad_clips else f"moni {recording_id}",
-                        "avg_logprob": None if recording_id in self.bad_clips else -0.25,
-                        "audio_seconds": len(data) / 100,
-                        "error": "audio: LibsndfileError: bad file" if recording_id in self.bad_clips else None,
-                    }
-                    for recording_id, data in chunk
-                ],
+                "clips": clips,
             }
 
 
@@ -369,6 +402,37 @@ def transcripts() -> list[Transcript]:
 def batch_row(batch_id: int) -> AsrBatch:
     with db.get_sync_sessionmaker()() as session:
         return session.get(AsrBatch, batch_id)
+
+
+def test_long_clips_are_stored_with_long_form(people: None, storage: LocalFileStorage, tmp_path: Path) -> None:
+    short = add_recording(storage, duration_s=30.0)
+    long = add_recording(storage, duration_s=95.0, length_flag="long_clip")
+
+    report = run(storage, tmp_path, FakeTranscriber(long_form=(long,)))
+
+    assert (report.status, report.clips_transcribed, report.clips_failed) == ("completed", 2, 0)
+    assert {t.recording_id: t.long_form for t in transcripts()} == {short: False, long: True}
+
+
+def test_long_clips_from_an_app_without_long_form_are_not_stored(
+    people: None, storage: LocalFileStorage, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The droplet was updated before the Modal app was redeployed: its results have no long_form,
+    # and a clip over 30 s was cut off at 30 s.
+    short = add_recording(storage, duration_s=12.0)
+    long = add_recording(storage, duration_s=95.0, length_flag="long_clip")
+
+    report = run(storage, tmp_path, FakeTranscriber(long_form=None))
+
+    assert {t.recording_id: t.long_form for t in transcripts()} == {short: None}
+    assert (report.status, report.failed_ids) == ("partial", [long])
+    assert "Redeploy scripts/modal_asr_app.py" in caplog.text
+    lines = [json.loads(line) for line in (tmp_path / "results" / str(report.batch_id) / "results.jsonl").read_text().splitlines()]
+    assert lines[0]["not_long_form"] == [long]
+
+    # The next batch, after the redeploy, picks it up.
+    report = run(storage, tmp_path, FakeTranscriber(long_form=(long,)))
+    assert report.clips_selected == 1 and {t.recording_id: t.long_form for t in transcripts()} == {short: None, long: True}
 
 
 def test_a_run_writes_transcripts_per_chunk(people: None, storage: LocalFileStorage, tmp_path: Path) -> None:

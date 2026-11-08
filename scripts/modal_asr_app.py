@@ -15,6 +15,17 @@ task="transcribe" (Whisper has no Chichewa token; the models were fine-tuned und
 forced_decoder_ids cleared, attention mask passed to generate(), fp16, greedy decoding. The
 average log-probability comes from compute_transition_scores(..., normalize_logits=True).
 
+Clips over 30 s (LONG_FORM_SECONDS, Whisper's window) use Whisper's long-form generation instead
+of being cut at 30 s, as tested with scripts/modal_asr_compare.py. Each is decoded on its own:
+- the feature extractor gets truncation=False, padding="longest" and return_attention_mask=True;
+- generate() decodes window by window with the same settings, plus return_timestamps=True (which
+  transformers 4.46.3 requires for more than 3000 feature frames) and return_segments=True;
+- each segment is decoded separately (the tokenizer drops the timestamp tokens) and the segments
+  are joined with a space (join_segments). Decoding the whole sequence at once runs the last word
+  of one segment into the first of the next.
+These clips have no average log-probability (long-form returns no scores here), and each result
+says whether long-form was used (long_form).
+
 Runs in Python 3.11 on Modal: keep the code here 3.11-compatible.
 """
 
@@ -45,6 +56,7 @@ WHISPER_BASE = "openai/whisper-large-v3"  # processor source for both models, as
 LANGUAGE = "shona"
 TASK = "transcribe"
 SAMPLE_RATE = 16000
+LONG_FORM_SECONDS = 30.0  # longer clips use long-form generation
 
 # =========
 # RESOURCES
@@ -79,6 +91,16 @@ image = (
 )
 
 model_cache = modal.Volume.from_name("hf-model-cache", create_if_missing=True)
+
+
+# =========
+# LONG-FORM
+# =========
+def join_segments(texts: list[str]) -> str:
+    """One transcript from long-form segment texts: joined with a single space, whitespace collapsed."""
+    import re
+
+    return re.sub(r"\s+", " ", " ".join(texts)).strip()
 
 
 # ===========
@@ -164,21 +186,58 @@ class Transcriber:
             results.append((text.strip(), logprob))
         return results
 
+    def _decode_long(self, audio) -> str:
+        """One clip over LONG_FORM_SECONDS, with long-form generation (see the module docstring)."""
+        import torch
+
+        processed = self.processor.feature_extractor(
+            audio,
+            sampling_rate=SAMPLE_RATE,
+            return_attention_mask=True,
+            return_tensors="pt",
+            truncation=False,
+            padding="longest",
+        )
+        gen = {"input_features": processed.input_features.to("cuda", dtype=self.dtype)}
+        if "attention_mask" in processed:
+            gen["attention_mask"] = processed.attention_mask.to("cuda")
+        with torch.no_grad():
+            out = self.model.generate(**gen, return_timestamps=True, return_segments=True)
+        segments = out["segments"][0]
+        texts = self.processor.tokenizer.batch_decode([s["tokens"] for s in segments], skip_special_tokens=True)
+        return join_segments(texts)
+
     @modal.method()
     def transcribe(self, clips: list[tuple[int, bytes]]) -> dict:
         """clips: (recording_id, WAV bytes). Per clip: recording_id, text (raw, stripped),
-        avg_logprob, audio_seconds, error (None if fine). Never raises for a bad clip."""
+        avg_logprob, audio_seconds, long_form, error (None if fine). Never raises for a bad clip."""
         rows: dict[int, dict] = {}
         ready: list[tuple[int, object]] = []
+        long: list[tuple[int, object]] = []
         for recording_id, wav_bytes in clips:
-            row = {"recording_id": recording_id, "text": None, "avg_logprob": None, "audio_seconds": None, "error": None}
+            row = {
+                "recording_id": recording_id,
+                "text": None,
+                "avg_logprob": None,
+                "audio_seconds": None,
+                "long_form": None,
+                "error": None,
+            }
             rows[recording_id] = row
             try:
                 audio = self._audio(wav_bytes)
                 row["audio_seconds"] = round(len(audio) / SAMPLE_RATE, 2)
-                ready.append((recording_id, audio))
+                row["long_form"] = len(audio) / SAMPLE_RATE > LONG_FORM_SECONDS
+                (long if row["long_form"] else ready).append((recording_id, audio))
             except Exception as exc:  # noqa: BLE001 - reported per clip
                 row["error"] = f"audio: {type(exc).__name__}: {exc}"[:500]
+
+        # Clips over 30 s: one at a time, long-form.
+        for recording_id, audio in long:
+            try:
+                rows[recording_id]["text"] = self._decode_long(audio)
+            except Exception as exc:  # noqa: BLE001 - reported per clip
+                rows[recording_id]["error"] = f"asr: {type(exc).__name__}: {exc}"[:500]
 
         for start in range(0, len(ready), BATCH_SIZE):
             batch = ready[start : start + BATCH_SIZE]

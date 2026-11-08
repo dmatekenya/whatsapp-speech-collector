@@ -14,10 +14,11 @@ being cut at 30 s: the feature extractor is called with truncation=False, paddin
 return_attention_mask=True, and generate() decodes the audio window by window with the same
 Shona/transcribe settings, greedy. transformers 4.46.3 requires return_timestamps=True for this
 (both models' generation_config has return_timestamps=False, and generate() refuses more than
-3000 feature frames without it); the timestamp tokens are removed by the tokenizer's decode. No
-log-probability for these clips (confidence is blank): long-form only returns scores with
-return_segments=True. Each row says whether it went through long-form. Under test: the ASR
-batch app (scripts/modal_asr_app.py) gets this path only once the transcripts look right.
+3000 feature frames without it). return_segments=True gives each segment's tokens: each is
+decoded on its own (the tokenizer drops the timestamp tokens) and the segments are joined with a
+space (join_segments), since decoding the whole sequence at once runs words together at segment
+boundaries. No log-probability for these clips (confidence is blank). Each row says whether it
+went through long-form. The ASR batch app (scripts/modal_asr_app.py) uses the same path.
 
 Usage (from the repo root):
     uv run modal run scripts/modal_asr_compare.py --wav data/audio/P0006/P0006_R000022.wav
@@ -135,19 +136,27 @@ def normalize_transcript(text: str) -> str:
 # ==========
 # TRANSCRIBE
 # ==========
+def join_segments(texts: list[str]) -> str:
+    """One transcript from long-form segment texts: joined with a single space, whitespace collapsed.
+    The same as scripts/modal_asr_app.py::join_segments."""
+    import re
+
+    return re.sub(r"\s+", " ", " ".join(texts)).strip()
+
+
 def whisper_call_kwargs(audio_seconds: float) -> tuple[dict, dict, bool]:
     """(feature extractor kwargs, generate() kwargs, long_form) for one Whisper clip.
 
     Up to LONG_FORM_SECONDS: as before (the feature extractor pads or cuts to 30 s, and
     generate() returns scores for the confidence). Longer: no truncation, padded to the clip
     itself, attention mask, and long-form generate(), which needs return_timestamps=True in
-    transformers 4.46.3 (these models' generation_config sets it to False).
+    transformers 4.46.3 (these models' generation_config sets it to False), returning segments.
     """
     fe = {"sampling_rate": SAMPLE_RATE, "return_attention_mask": True, "return_tensors": "pt"}
     if audio_seconds <= LONG_FORM_SECONDS:
         return fe, {"return_dict_in_generate": True, "output_scores": True}, False
     fe.update(truncation=False, padding="longest")
-    return fe, {"return_timestamps": True}, True
+    return fe, {"return_timestamps": True, "return_segments": True}, True
 
 
 @app.function(gpu=GPU, image=image, volumes={"/cache": model_cache}, secrets=[hf_secret], timeout=1800)
@@ -221,8 +230,9 @@ def transcribe(model_key: str, clips: list) -> dict:
             with torch.no_grad():
                 out = model.generate(**gen, **gen_kwargs)
             if long_form:
-                # A plain tensor of token ids (timestamps included); decode drops the timestamps.
-                text = processor.tokenizer.batch_decode(out, skip_special_tokens=True)[0].strip()
+                # Each segment decoded on its own (timestamps dropped), then joined with a space.
+                tokens = [segment["tokens"] for segment in out["segments"][0]]
+                text = join_segments(processor.tokenizer.batch_decode(tokens, skip_special_tokens=True))
                 confidence = None
             else:
                 text = processor.tokenizer.batch_decode(out.sequences, skip_special_tokens=True)[0].strip()

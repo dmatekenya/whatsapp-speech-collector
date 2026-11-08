@@ -270,7 +270,7 @@ constraint: a forced re-run adds a row; the latest per source and model is by `c
 | `model_key`, `model_repo`, `model_revision` | text, nullable | ASR only: the model key, Hugging Face repo and commit SHA |
 | `text` | text | As the model returned it (stripped, not normalised). Can be empty |
 | `avg_logprob` | float, nullable | Mean log-probability of the generated tokens (ASR only) |
-| `long_form` | bool, nullable | ASR only: decoded with Whisper long-form generation (audio over 30 s). Null for older rows and other sources. Added by migration `f3a7c2d9e816` |
+| `long_form` | bool, nullable | ASR only: true if decoded with Whisper long-form generation (audio over 30 s, from 2026-11-08), false for 30 s or less. Null for rows from before the Modal app reported it, and for other sources. Added by migration `f3a7c2d9e816` |
 | `batch_id` | FK → asr_batches, nullable, indexed | The batch that wrote it |
 | `created_at` | timestamptz | |
 

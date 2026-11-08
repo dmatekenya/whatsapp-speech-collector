@@ -78,40 +78,21 @@ today:
 # "general" is shown before a participant's first session; the task-specific part before their
 # first session of each task type. Both are shown again whenever they reply INSTRUCTIONS.
 instructions:
+  # Kept short: contributors get a full guide. {max_length} is this task type's limit for a new
+  # recording, {max_length_older} for an older voice note or audio file (clip_limits).
   general: |
-    A few tips for good recordings:
-    1. Find a quiet place, away from TV, radio and crowds.
-    2. Hold the phone about a hand's length from your mouth.
-    3. Press and hold the microphone button, wait one second, then start speaking.
-    4. Speak clearly, at your normal pace.
-    5. Wait one second after you finish before letting go.
-    6. For sentences, pictures and questions, always record a new voice note. Don't forward one or attach an audio file.
-    7. Aim for about 15 to 30 seconds per voice note. A little longer is fine.
+    • Find a quiet place, wait a second before speaking and after you finish.
+    • To redo a voice note, swipe right on my message and record again.
+    • Send *PROGRESS* at any time to see your minutes.
   sentence: |
-    For each sentence:
-    • Read the whole sentence exactly as written.
-    • Don't add any words before or after it.
-    • If you make a mistake, simply record it again.
+    Read the sentence exactly as written, at your normal pace (up to {max_length}).
   image: |
-    For each picture:
-    • Describe what you see: the people, places and objects, and what is happening.
-    • Speak in Chichewa, in your own words.
-    • Talk for about 15 to 30 seconds, and no more than {max_length}.
+    Describe what you see in your own words. Aim for 15–30 seconds (up to {max_length}).
   conversation_starter: |
-    For each question:
-    • Answer in your own words, as if talking to a friend.
-    • Speak in Chichewa.
-    • Talk for about 15 to 30 seconds, and no more than {max_length}.
-    • Don't mention private details such as full names, addresses or phone numbers.
+    Answer in your own words, as if talking to a friend. Aim for 15–30 seconds (up to {max_length}).
   free_speech: |
-    For each voice note:
-    • Talk about anything you like: your day, your home area, a story, something you enjoy.
-    • Speak naturally in Chichewa, as if talking to a friend.
-    • Aim for 15 to 30 seconds; a voice note can be up to {max_length}.
-    • Press and hold the microphone button while you speak.
-    • One topic per voice note is fine.
-    • You can also forward an older voice note of your own (up to {max_length_older}), if it's only your voice. We check that it's you.
-    • Don't mention private details such as full names, addresses or phone numbers.
+    Talk about anything: your day, a story, food, work, a tradition. One topic per voice note. Aim for 15–30 seconds (up to {max_length}).
+    You can also send an older voice note or audio file of your own, up to {max_length_older}, if only your voice is in it and it doesn't mention names or private details.
   reminder: "Reply *INSTRUCTIONS* at any time to see these tips again."
 
 # ===========

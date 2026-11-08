@@ -193,9 +193,10 @@ Recordings are classified at two levels:
       retake used).
     - **outside a session:** stored as rejected (`not_recorded`) and the bot replies as usual.
     - Forwarded wins over uploaded (a forwarded audio file counts as forwarded).
-  - The recording tips tell participants to record a new voice note for sentences, pictures and
-    questions, and the free-speech instructions say an older voice note of their own may be
-    forwarded and will be checked.
+  - The bot's instructions are kept short, since contributors get a full guide. The free-speech
+    instructions say an older voice note or audio file of their own (up to 2 minutes) may be sent
+    if only their voice is in it. The other task types' instructions don't mention forwarding;
+    the reply to a forwarded or uploaded clip asks for a new recording.
   - **unknown** (Twilio-era recordings, which carry no flags): accepted as normal.
   - The rule for each origin is set in `config/assignment_settings.yaml` (`audio_origin`:
     accept, reject or accept_flagged), and a task type can override it
@@ -255,12 +256,17 @@ Recordings are classified at two levels:
     traced to the exact model. Each run is recorded in `asr_batches`; audio is passed in the call
     and never stored on Modal. Runs are scheduled in `config/asr_batch.yaml` (`runs_per_day`, from
     02:00 Malawi time) and can be run on demand.
-  - **Clips over 30 s:** Whisper decodes 30 s at a time, and the batch app would cut longer clips
-    off. Until long-form decoding is enabled, the batch skips them (they stay untranscribed, keep
-    their `long_clip` / `long_sentence` flag, and a later batch picks them up). Long-form
-    generation (Whisper decoding the clip window by window) is being tested first in
-    `scripts/modal_asr_compare.py` on real 60 s and 120 s clips; it is added to the batch app
-    only once the transcripts look right. `transcripts.long_form` will record which clips used it.
+  - **Clips over 30 s:** Whisper decodes 30 s at a time, so longer clips use Whisper's long-form
+    generation, with the same settings:
+    - The clip is decoded window by window, without being cut at 30 s, and each clip is decoded on
+      its own.
+    - The text of each segment is decoded separately and the segments are joined with a space.
+      Decoding them together ran words together at segment boundaries.
+    - These transcripts have no average log-probability, and `transcripts.long_form` records
+      which clips used long-form.
+    - Tested on real 60–120 s clips with both models before it was enabled.
+    - A result for a long clip from an app without long-form (i.e. not yet redeployed) is not
+      stored, so the clip is retried.
   - **Step 2, scoring (next):** compare read speech against the prompt (CER/WER) to accept, send
     to human review, or reject.
 - **Planned speaker check:** compare uploaded and forwarded clips (and later all clips) with a voice profile
@@ -313,4 +319,6 @@ Recordings are classified at two levels:
 | 2026-11-07 | Older/forwarded voice notes accepted for free speech only, flagged for speaker check; other task types still require a new recording |
 | 2026-11-07 | Uploaded audio files follow the same rule as forwarded voice notes: accepted for free speech only, flagged for speaker check; rejected (`not_recorded`) in all other task types and outside a session, with a request for a new voice note and no retake used |
 | 2026-11-07 | Per-task clip limits: sentences flagged > 30 s, rejected > 45 s; pictures/questions/free speech up to 60 s, older voice notes/uploads in free speech up to 120 s; aim 15–30 s; long clips kept, flagged and split before training; ASR uses long-form transcription for clips > 30 s (being tested; until then the ASR batch skips them). Supersedes the planned "read faster, then skip" handling of too-long sentences |
+| 2026-11-08 | Long-form ASR enabled for clips over 30 s (tested with both models on a 90 s clip: about 0.1 real-time factor, nothing cut off); segment texts joined with a space; `transcripts.long_form` filled; the ASR batch no longer skips long clips |
 | 2026-11-07 | Long, mostly silent clips: over 30 s with under 20% active audio rejected as `no_speech` (retake), so they can't count in full |
+| 2026-11-08 | Bot instructions shortened, since contributors get a full guide: three general tips (quiet place and pauses, swipe-reply to redo, PROGRESS) and one or two lines per task type with its length limit; no change to behaviour |

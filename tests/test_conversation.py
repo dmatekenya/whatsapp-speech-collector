@@ -136,7 +136,7 @@ def test_first_greeting_ready_full_session_then_continue(chat: ChatHarness) -> N
     for key in ("progress.none_yet", "today.sentence", "instructions.general", "ready.ask"):
         assert text_of(key) in offer, key
     assert text_of("welcome.first_time", first_name="Chisomo") in offer
-    assert "For each sentence:" in offer
+    assert "Read the sentence exactly as written, at your normal pace (up to 30 seconds)." in offer
     assert state().state == "awaiting_ready"
     assert state().context["instructions_seen"] == {"general": True, "sentence": True}
 
@@ -144,7 +144,7 @@ def test_first_greeting_ready_full_session_then_continue(chat: ChatHarness) -> N
     a1 = assignments()[0]
     assert first.startswith("Sentence 1 of 3:") and a1.prompt_text_snapshot in first
     assert state().state == "in_session"
-    assert "A few tips" not in first  # already shown with the offer
+    assert "swipe right on my message" not in first  # already shown with the offer
 
     second = only(chat.voice(10))
     assert second.startswith("✅ Received. Sentence 2 of 3:")
@@ -160,8 +160,8 @@ def test_first_greeting_ready_full_session_then_continue(chat: ChatHarness) -> N
     # Continue: the image tips (first time for this type) and the first picture, in one message.
     (image,) = chat.text("1")
     assert image.is_image and image.prompt_id.startswith("I")
-    assert "For each picture:" in image.body and "Picture 1 of 3." in image.body
-    assert "A few tips" not in image.body  # general tips only the first time ever
+    assert "Describe what you see in your own words." in image.body and "Picture 1 of 3." in image.body
+    assert "swipe right on my message" not in image.body  # general tips only the first time ever
     url = urlparse(image.media_url)
     assert f"{url.scheme}://{url.netloc}" == get_settings().public_base_url.rstrip("/")
     assert verify_token(url.path.removeprefix(MEDIA_ROUTE + "/"), get_settings().media_signing_secret.get_secret_value()) == image.prompt_id
@@ -372,7 +372,7 @@ def test_help_progress_instructions_keep_the_state(chat: ChatHarness) -> None:
     assert "+265 999 000 111 (project team)" in only(chat.text("HELP"))
     assert only(chat.text("progress")) == text_of("progress.none_yet")
     tips = only(chat.text(" Instructions! "))
-    assert "A few tips" in tips and "For each sentence:" in tips
+    assert "swipe right on my message" in tips and "Read the sentence exactly as written" in tips
     assert state().state == "in_session"
 
 
@@ -735,7 +735,7 @@ def test_failed_welcome_then_hi_gives_the_welcome_again(chat: ChatHarness) -> No
     offer = only(chat.text("Hi"))
 
     assert text_of("welcome.first_time", first_name="Chisomo") in offer
-    assert "For each sentence:" in offer  # the instructions too: never seen
+    assert "Read the sentence exactly as written" in offer  # the instructions too: never seen
     assert state().state == "awaiting_ready"
 
 
@@ -875,8 +875,8 @@ def free_chat(clean_db: None, monkeypatch: pytest.MonkeyPatch) -> ChatHarness:
 def test_free_speech_session_end_to_end(free_chat: ChatHarness) -> None:
     offer = only(free_chat.text("Hi"))
     assert text_of("today.free_speech") in offer
-    assert "For each voice note:" in offer and "Aim for 15 to 30 seconds; a voice note can be up to 1 minute." in offer
-    assert "forward an older voice note of your own (up to 2 minutes)" in offer
+    assert "Talk about anything: your day" in offer and "Aim for 15–30 seconds (up to 1 minute)." in offer
+    assert "older voice note or audio file of your own, up to 2 minutes," in offer
 
     first = only(free_chat.text("1"))
     assert first.startswith("Voice note 1 of 5: tell me about anything you like.")
@@ -890,7 +890,7 @@ def test_free_speech_session_end_to_end(free_chat: ChatHarness) -> None:
     assert "Voice note 1 of 5:" in retake
 
     assert only(free_chat.voice(10)).startswith("✅ Received. Voice note 2 of 5:")
-    assert "For each voice note:" in only(free_chat.text("INSTRUCTIONS"))
+    assert "Talk about anything:" in only(free_chat.text("INSTRUCTIONS"))
 
     progress = only(free_chat.text("progress"))
     assert progress.splitlines() == [

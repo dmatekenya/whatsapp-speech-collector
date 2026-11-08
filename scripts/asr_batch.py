@@ -12,9 +12,8 @@ Selection: stored recordings of registered participants with a WAV on disk;
 not rejected at arrival (empty, too_short, too_long, no_speech, not_recorded);
 not duplicates; not test participants (unless --include-test or
 selection.include_test); not already transcribed by this model (unless
---force); not over 30 s (skipped until the Modal app has long-form decoding,
-so they aren't cut off; a later batch picks them up). Settings: config/asr_batch.yaml. Prints and logs recording IDs and
-counts only.
+--force). Clips over 30 s go through the Modal app's long-form decoding.
+Settings: config/asr_batch.yaml. Prints and logs recording IDs and counts only.
 """
 
 import argparse

@@ -1,6 +1,6 @@
-"""Turn the consent-form Excel export into a participant CSV ready for import.
+"""Turn the consent-form export into a participant CSV ready for import.
 
-Reads the Excel file exported from the Tiyankhuleni consent form (sheet "Consent Records") and writes
+Reads the Excel (.xlsx) or CSV file exported from the Tiyankhuleni consent form and writes
 a CSV with the columns of the participant import (as in data/participants/test-contributors.csv),
 keeping only participants who may record. Everything else in the export (mobile money details,
 signatures, guardian/assistant data, verification links) is left out.
@@ -25,6 +25,7 @@ numbers), for follow-up in the form's admin.
 # =======
 import argparse
 import csv
+import io
 import re
 import sys
 import zipfile
@@ -118,6 +119,16 @@ def read_first_sheet(path: Path) -> list[list[str]]:
     return rows
 
 
+def read_csv(path: Path) -> list[list[str]]:
+    """Read a CSV export (UTF-8, with or without BOM; comma or semicolon separated)."""
+    text = path.read_text(encoding="utf-8-sig")
+    try:
+        dialect = csv.Sniffer().sniff(text.splitlines()[0], delimiters=",;\t")
+    except (csv.Error, IndexError):
+        dialect = csv.excel
+    return [row for row in csv.reader(io.StringIO(text, newline=""), dialect)]
+
+
 # =========
 # Cleaning
 # =========
@@ -152,16 +163,20 @@ def is_yes(value: str) -> bool:
 # ====
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("export", type=Path, help="Excel export from the consent form (.xlsx)")
+    parser.add_argument("export", type=Path, help="export from the consent form (.xlsx or .csv)")
     parser.add_argument("--output", type=Path, required=True, help="CSV to write, e.g. data/participants/pilot.csv")
     parser.add_argument("--signer-types", default=DEFAULT_SIGNER_TYPES,
                         help=f"comma-separated signer types to include (default: {DEFAULT_SIGNER_TYPES})")
     parser.add_argument("--dry-run", action="store_true", help="report counts only; write nothing")
     args = parser.parse_args()
 
-    if args.export.suffix.lower() != ".xlsx":
-        sys.exit("The export must be an .xlsx file.")
-    rows = read_first_sheet(args.export)
+    suffix = args.export.suffix.lower()
+    if suffix == ".xlsx":
+        rows = read_first_sheet(args.export)
+    elif suffix == ".csv":
+        rows = read_csv(args.export)
+    else:
+        sys.exit("The export must be an .xlsx or .csv file.")
     if not rows:
         sys.exit("The export has no rows.")
     header = [clean(h) for h in rows[0]]

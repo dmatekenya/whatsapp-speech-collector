@@ -34,8 +34,8 @@ def write_csv(tmp_path: Path, name: str, rows: list[list[str]], header: list[str
     return path
 
 
-def run(path: Path, **kwargs: bool) -> ImportReport:
-    importer = ParticipantImporter.from_file(path)
+def run(path: Path, batch: str | None = None, **kwargs: bool) -> ImportReport:
+    importer = ParticipantImporter.from_file(path, batch=batch)
     importer.today = TODAY
     return run_import(importer, path, db.get_sync_sessionmaker(), **kwargs)
 
@@ -122,6 +122,39 @@ def test_reimport_is_idempotent_and_matches_by_phone(clean_db: None, tmp_path: P
     assert [p.participant_id for p in rows] == ["P0001", "P0002"]
     assert rows[0].attributes["age"] == 35
     assert rows[0].batch == "batch" and rows[0].source_file == "batch.csv"  # kept
+
+
+def test_batch_option_replaces_the_file_name(clean_db: None, tmp_path: Path) -> None:
+    # A batch column value wins for its row; --batch fills the rest instead of the file name.
+    header = [*HEADER, "batch"]
+    path = write_csv(tmp_path, "cohort_03.csv", [[*ALICE, ""], [*BEN, "testers"]], header=header)
+
+    report = run(path, batch="pilot")
+
+    assert report.ok, report.render()
+    alice, ben = participants()
+    assert (alice.batch, ben.batch) == ("pilot", "testers")
+    assert alice.source_file == "cohort_03.csv"  # the file is still recorded
+
+    # Like the other defaults, it is for new participants only: a re-import with another
+    # --batch leaves existing participants' batch as it was.
+    again = run(write_csv(tmp_path, "cohort_03_fix.csv", [ALICE, CARO]), batch="pilot-2")
+    assert again.ok and again.counts["new"] == 1
+    assert [p.batch for p in participants()] == ["pilot", "testers", "pilot-2"]
+
+
+def test_batch_option_on_the_command_line(clean_db: None, tmp_path: Path) -> None:
+    from scripts.import_participants import main
+
+    path = write_csv(tmp_path, "cohort_04.csv", [ALICE])
+    with pytest.raises(SystemExit) as done:
+        main([str(path), "--batch", "  pilot  "])
+    assert done.value.code == 0
+    assert [p.batch for p in participants()] == ["pilot"]  # spaces trimmed
+
+    with pytest.raises(SystemExit) as refused:
+        main([str(path), "--batch", " "])
+    assert refused.value.code == 2  # argparse: an empty batch is refused
 
 
 def test_ids_copy_written_and_original_untouched(clean_db: None, tmp_path: Path) -> None:

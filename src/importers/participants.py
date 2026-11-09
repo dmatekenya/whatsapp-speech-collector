@@ -29,9 +29,13 @@ UPDATABLE_FIELDS = ("name", "phone_number", "status", "is_test", "batch", "enrol
 class ParticipantImporter(BatchImporter):
     title = "PARTICIPANTS"
 
-    def __init__(self, config: ImportConfig, source_file: str, today: date | None = None) -> None:
+    def __init__(
+        self, config: ImportConfig, source_file: str, today: date | None = None, batch: str | None = None
+    ) -> None:
         super().__init__(config)
         self.source_file = source_file
+        # Batch for rows without a batch value; the file name without extension if not given.
+        self.batch = batch or Path(source_file).stem
         self.today = today or date.today()
         self.id_options = config.options["id"]
         self.id_column = self.id_options["column"]
@@ -41,12 +45,14 @@ class ParticipantImporter(BatchImporter):
         self.parsers["phone"] = self._parse_phone
 
     @classmethod
-    def from_file(cls, csv_path: Path, config_path: Path = DEFAULT_CONFIG) -> "ParticipantImporter":
-        return cls(load_config(config_path), source_file=csv_path.name)
+    def from_file(
+        cls, csv_path: Path, config_path: Path = DEFAULT_CONFIG, batch: str | None = None
+    ) -> "ParticipantImporter":
+        return cls(load_config(config_path), source_file=csv_path.name, batch=batch)
 
-    # ============================================================
-    # Validation
-    # ============================================================
+    # ==========
+    # VALIDATION
+    # ==========
     def _parse_phone(self, value: str, spec: FieldSpec) -> str:
         return normalize_phone(value, self.default_region, self.allowed_country_codes)
 
@@ -60,9 +66,9 @@ class ParticipantImporter(BatchImporter):
                 for number in numbers[1:]:
                     report.error(number, column, f"same value as row {numbers[0]}")
 
-    # ============================================================
-    # Database
-    # ============================================================
+    # ========
+    # DATABASE
+    # ========
     def lock(self, session: Session) -> None:
         # Blocks other writers (another import) but not the worker's reads.
         session.execute(text("LOCK TABLE participants IN SHARE ROW EXCLUSIVE MODE"))
@@ -70,7 +76,7 @@ class ParticipantImporter(BatchImporter):
     def _defaults(self, field: str) -> Any:
         spec = self.config.fields[field]
         if field == "batch":
-            return Path(self.source_file).stem
+            return self.batch
         if field == "enrolled_on":
             return self.today
         return spec.default

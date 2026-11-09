@@ -122,7 +122,7 @@ The registry, loaded from batch CSV files with `scripts/import_participants.py` 
 | `phone_number` | text, unique | Normalized E.164 |
 | `status` | text | `active`, `paused`, `completed`, `withdrawn` (`inactive` kept for older rows, treated like `paused`). STOP + confirm sets `withdrawn` |
 | `is_test` | bool | Test participants are excluded from dataset exports |
-| `batch` | text | Source file name |
+| `batch` | text | The CSV's `batch` column, else `--batch` at import, else the file name without extension. Set when the participant is created; a re-import changes it only through the `batch` column |
 | `enrolled_on` | date | |
 | `attributes` | JSONB | Configurable fields (`config/participants.yaml`): `age`, `sex`, `district`, `first_language`, `accent`, and the optional primary recording device from registration: `primary_device_type` (`phone`, `tablet`, `computer`), `primary_device_brand`, `primary_device_model`. Also an optional `targets_minutes` override: `{"per_participant": 6}` (split as in `config/assignment_settings.yaml`, each type rounded to 0.5 min) or explicit per-type minutes, e.g. `{"sentence": 2, "image": 1, "conversation_starter": 1}` (types left out keep the default). The total shown to the participant is always the sum of the per-type targets |
 | `created_at`, `updated_at` | timestamptz | |

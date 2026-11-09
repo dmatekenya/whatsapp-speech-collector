@@ -34,7 +34,7 @@ fields:
     default: active
     report_counts: true
   is_test: {type: bool, default: false, report_counts: true}
-  batch: {type: text}        # default: file name without extension
+  batch: {type: text}        # default: --batch, else the file name without extension
   enrolled_on: {type: date}  # default: import date
 
 attributes:

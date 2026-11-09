@@ -39,7 +39,8 @@ values from `.env.production.example`. If the droplet's `.env` uses other names,
 2. [Routine operations](#2-routine-operations): update, roll back, back up, restore
 3. [WhatsApp](#3-whatsapp): Meta webhook, Twilio fallback
 4. [Starting a new collection run](#4-starting-a-new-collection-run)
-5. [Testers and participants](#5-testers-and-participants): add, override targets, reset
+5. [Testers and participants](#5-testers-and-participants): add, override targets, reset, tester
+   to contributor, returning contributors
 6. [ASR batch (Modal)](#6-asr-batch-modal)
 7. [Troubleshooting](#7-troubleshooting)
 8. [Local development](#8-local-development)
@@ -419,18 +420,32 @@ Use this for each new group of participants (e.g. a cohort or a weekly run).
 
 | Content | Location | Notes |
 |---|---|---|
-| Participants | `data/participants/<run>.csv` (e.g. `sr-c01.csv`) | Same columns as `data/participants.example.csv`. Phone numbers like `+265 888 72 15 91`. Saved as **CSV UTF-8**. `is_test` false for real participants. Optional `primary_device_type`, `primary_device_brand`, `primary_device_model`. The file name without `.csv` becomes the participants' `batch` (e.g. `sr-c01`). |
+| Participants | `data/participants/<run>.csv` (e.g. `sr-c01.csv`) | Same columns as `data/participants.example.csv`. Phone numbers like `+265 888 72 15 91`. Saved as **CSV UTF-8**. `is_test` false for real participants. Optional `primary_device_type`, `primary_device_brand`, `primary_device_model`. Their `batch` is the file name without `.csv` (e.g. `sr-c01`), unless the import gives `--batch` (e.g. `--batch pilot`) or the CSV has a `batch` column. |
 | Sentences | `data/prompts/text/<batch>.csv` | Curated, with no sensitive items. They must pass the import's checks in `config/prompts.yaml`. Keep them short enough to read in well under 45 seconds, the sentence limit in `clip_limits`. |
 | Conversation starters | `data/prompts/conversation-starters/<batch>.csv` | Chichewa; columns as in `config/prompts.yaml` |
-| Images | `data/prompts/images/<batch>/<theme>/...` | One folder per theme; JPG or PNG |
+| Images | `data/prompts/images/<batch>/<theme>/...` | One folder per theme; JPG or PNG. The theme is the folder name, so check its spelling in the dry run |
 
-Participant CSVs contain names and phone numbers. They are never committed to git.
+Participant CSVs contain names and phone numbers. They are never committed to git, emailed or sent
+on WhatsApp; delete local copies you don't need.
+
+- **Name participant files after the round**: `pilot.csv`, `round-1.csv`, `round-2.csv`, …, or
+  import with `--batch pilot` / `--batch round-1`. `batch` is the only record of the round a
+  participant joined in.
+- **New prompts go in a new file or folder per batch** (e.g. `sentences-2027-02.csv`,
+  `images/2026-12-batch-2/`), or, if you keep one file, give the new rows a different `source`
+  value. Either way a batch can be told apart and retired later. Don't append rows to an old file
+  without changing `source`.
+- Prompts carry over from round to round: a new round doesn't need new prompt files. All active
+  prompts of a type form one pool, whatever file they came from.
 
 ### 4.2 Plan the run (on your Mac)
 
 1. In `config/assignment_settings.yaml`, review:
    - `targets_minutes.per_participant`: recorded minutes per person (20 for the pilot). A multiple
-     of 20 makes every type come out in whole or half minutes.
+     of 20 makes every type come out in whole or half minutes. It is a **lifetime total**, not per
+     round: counted minutes include everything a participant has ever recorded. A returning
+     contributor only records what is left, e.g. with 60 for round 1, a pilot contributor with 20
+     minutes records about 40 more (the cap of 60 per person holds automatically).
    - `targets_minutes.split`: normally unchanged (30/25/25/20, so 70% spontaneous).
    - `task_types.<type>.speakers_per_prompt`: raise it if a type would run out of prompts.
    - `clip_limits` and `clip_checks`: per-task length limits and the speech check, normally
@@ -496,6 +511,21 @@ cd /home/dun/WhatsApp-speech-collector
      "update prompts set active = false where prompt_type = 'image' and source_file like 'test/%';"
    ```
 
+   Other ways to retire, when needed:
+
+   ```bash
+   # a topic (e.g. hold back political conversation starters)
+   docker compose exec postgres psql -U speech -d speech_collector -c \
+     "update prompts set active = false where prompt_type = 'conversation_starter' and domain = 'ndale';"
+   # single prompts
+   docker compose exec postgres psql -U speech -d speech_collector -c \
+     "update prompts set active = false where prompt_id in ('S00123', 'C0045');"
+   ```
+
+   Retiring only stops new assignments. Recordings, IDs and history are kept, and prompts already
+   sent can still be answered. Prompts carry over between rounds, so retire only test sets and
+   unsuitable prompts.
+
 2. **Import.** Always run `--dry-run` first, then for real. Run imports in the same order on every
    environment so prompt IDs match.
 
@@ -524,6 +554,16 @@ cd /home/dun/WhatsApp-speech-collector
    Each import ends with `RESULT: imported` and reports any rejected rows. Rejected rows are
    written to `<name>_rejected.csv`; add `--strict` to import nothing unless every row is valid.
    Re-importing the same file is safe.
+
+   - **Prompts:** rows that match an existing prompt (normalised text, or image content) are
+     skipped and keep their IDs; new ones get the next IDs. Length warnings (`length=short`,
+     `length=long`, `all_caps`) are flags, not errors.
+   - **Image `--source`** records where the pictures came from (`ai-generated`, `own-photos`,
+     `licensed-<provider>`, …). `TBD` is accepted when unknown; fill it in later with
+     `update prompts set source = '<source>' where prompt_type = 'image' and source = 'TBD';`.
+     Settle it before any dataset release.
+   - **Participants:** a phone number that is already registered is reported as a duplicate and
+     not added; that person keeps their ID and their recorded minutes (see 5.4 and 5.5).
 3. **Check what's active now:**
 
    ```bash
@@ -537,7 +577,7 @@ cd /home/dun/WhatsApp-speech-collector
 
 Participants from an earlier run who should stop recording can be set to `completed`. The bot then
 answers them with the "completed" message and gives no more tasks. `batch` is the CSV's file name
-without `.csv`:
+without `.csv`, or the name given with `--batch` at import:
 
 ```bash
 docker compose exec postgres psql -U speech -d speech_collector -c \
@@ -589,6 +629,15 @@ of the ASR batch.
 1. Put them in a small CSV, e.g. `data/participants/testers.csv`.
 2. Copy it to the droplet (4.3) and import it (4.5, with `--dry-run` first).
 
+`is_test` belongs to the **person, not to individual recordings**: it covers everything they have
+recorded and will record. It does not stop recordings counting towards targets; it only keeps
+their data out of exports and the default ASR batch. To mark a whole test batch:
+
+```bash
+docker compose exec postgres psql -U speech -d speech_collector -c \
+  "update participants set is_test = true where batch = '<test-batch>';"
+```
+
 ### 5.2 Override a participant's targets
 
 A short target lets a tester reach every task quickly. There are two kinds of override, both stored
@@ -630,6 +679,33 @@ you add `--yes`. **On the droplet:**
 docker compose exec api python -m scripts.reset_participant P00XX --dry-run
 docker compose exec api python -m scripts.reset_participant P00XX
 ```
+
+### 5.4 A tester becomes a real contributor
+
+One participant record can't be partly test and partly real, and phone numbers are unique across
+**all** participants, active, withdrawn or test. So a tester who joins a round as a real contributor
+gets a **new ID**:
+
+1. Retire the test record and free the phone number (the `-test` suffix means it can never match an
+   incoming WhatsApp number again):
+
+   ```bash
+   docker compose exec postgres psql -U speech -d speech_collector -c \
+     "update participants set status = 'withdrawn', is_test = true, phone_number = phone_number || '-test' where participant_id = 'P00XX';"
+   ```
+
+2. Import the round's file as usual (4.5). They get a new P-number, start from zero minutes, and
+   their test recordings stay under the old, test-only ID.
+
+Don't do this for testers who keep testing (e.g. the project team's phones): the bot would no longer
+recognise their number.
+
+### 5.5 Returning contributors
+
+A contributor who takes part in another round keeps their ID and phone number. Leave them out of the
+new round's file, or let the import report them as duplicates. Targets are lifetime totals (4.2), so
+they record only what is left up to `per_participant`. `batch` keeps the round they first joined in;
+work out minutes per round (e.g. for payments) from recording dates.
 
 ---
 
@@ -777,7 +853,9 @@ docker compose exec postgres psql -U speech -d speech_collector -c \
 | HTTPS fails | DNS or ports | `dig +short bot.zazoai.com @8.8.8.8`; then `docker compose restart caddy` |
 | Images don't arrive | WhatsApp can't fetch the image URL | `PUBLIC_BASE_URL=https://bot.zazoai.com`; `docker compose logs caddy`; check with `send_test_image` (below) |
 | Meta dashboard won't load or blocks actions | Browser or new-device checks | Use Chrome; wait out "new device" timers instead of retrying |
-| `asr_batch.sh`: "uv not found" | Runner not set | `ASR_BATCH_RUNNER=docker` in `~/.bashrc` and in the crontab line (section 6) |
+| `asr_batch.sh`: "uv not found", or "connection refused" on port 5432 | Runner not set, so it ran on the host instead of in the container | `ASR_BATCH_RUNNER=docker` in `~/.bashrc` (then `source ~/.bashrc`) and in the crontab line (section 6); delete any `.venv` it created in the app folder |
+| Participant import: phone number already registered | The number belongs to an existing (possibly test) participant | Returning contributor: nothing to do (5.5). Tester becoming a contributor: 5.4 |
+| A user can't log in: "password must be changed" / "Authentication token manipulation error" | Forced password change at first login | As an admin: `sudo passwd <user>`, then `sudo chage -d "$(date +%F)" <user>`; check with `sudo chage -l <user>` |
 
 **Check image sending.** **On the droplet**, this prints a signed image URL and sends nothing.
 Open the URL in a browser; it should show the picture:

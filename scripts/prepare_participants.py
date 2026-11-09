@@ -17,10 +17,13 @@ Two layouts are recognised from the header row:
     - simple: Name,Phone Number,Age,Sex,District,First Language,Accent (a hand-made list). It has no
       consent columns, so include only people whose consent is verified.
 
-Who is included from a form export (all must hold):
-    Review status = verified; Adult confirmed = Yes; Signer type in --signer-types (default: self,
-    assisted); Participation, Public audio and Demographics publication consent = Yes; a WhatsApp
-    number; not a duplicate WhatsApp number (first record kept).
+Key columns (a row missing any of them is excluded):
+    form:   Participant name, WhatsApp, Sex, Age group, First language, Dialect
+    simple: Name, Phone Number, Sex, Age, First Language, Accent
+Other columns may be blank. In a form export, a row is excluded only for an explicit "No" in
+Adult confirmed or a consent column, or a signer type other than --signer-types (default: self,
+assisted); blank consent fields or a review status other than "verified" are included but listed as
+warnings. Duplicate WhatsApp numbers: the first record is kept.
 In both layouts: anyone whose age (or the top of their age group) is under 18 is excluded, numbers
 are normalised to +265..., and numbers that aren't Malawian mobiles (+265 + 9 digits) are flagged.
 Excluded records are listed in <output>-excluded.csv by form reference and reason only (no names or
@@ -64,11 +67,9 @@ COLUMN_MAP = {
     "Primary device model": "primary_device_model",
 }
 
-REQUIRED_FORM_COLUMNS = [
-    "Reference", "Participant name", "WhatsApp", "Sex", "District", "First language", "Dialect",
-    "Signer type", "Adult confirmed", "Participation consent", "Public audio consent",
-    "Demographics publication consent", "Review status",
-]
+# Key columns: must be in the header, and a row with any of them blank is excluded.
+# All other columns (district, consent, review status, ...) may be missing or blank.
+REQUIRED_FORM_COLUMNS = ["Participant name", "WhatsApp", "Sex", "Age group", "First language", "Dialect"]
 
 # Simple participant list (temporary layout): Name,Phone Number,Age,Sex,District,First Language,Accent
 SIMPLE_COLUMN_MAP = {
@@ -82,7 +83,7 @@ SIMPLE_COLUMN_MAP = {
     "Primary device brand": "primary_device_brand",
     "Primary device model": "primary_device_model",
 }
-REQUIRED_SIMPLE_COLUMNS = ["Name", "Phone Number", "Sex", "District", "First Language", "Accent"]
+REQUIRED_SIMPLE_COLUMNS = ["Name", "Phone Number", "Sex", "Age", "First Language", "Accent"]
 AGE_COLUMN = {"form": "Age group", "simple": "Age"}
 PHONE_COLUMN = {"form": "WhatsApp", "simple": "Phone Number"}
 
@@ -252,30 +253,49 @@ def main() -> int:
         ref = (get(row, "Reference") if layout == "form" else "") or f"row {line_no}"
         reasons = []
 
+        # Key values must be present
+        for col in REQUIRED_FORM_COLUMNS if layout == "form" else REQUIRED_SIMPLE_COLUMNS:
+            if not get(row, col):
+                reasons.append(f"missing {col}")
+
+        # Consent fields: an explicit "No" (or a guardian/representative signer) excludes the row;
+        # a blank value is allowed but reported as a warning to follow up.
         if layout == "form":
-            if get(row, "Review status").lower() != "verified":
-                reasons.append("not verified")
-            if not is_yes(get(row, "Adult confirmed")):
+            blank = []
+            status = get(row, "Review status").lower()
+            if not status:
+                blank.append("Review status")
+            elif status != "verified":
+                warnings.append(f"{ref}: review status '{status}' (not verified)")
+            adult = get(row, "Adult confirmed")
+            if not adult:
+                blank.append("Adult confirmed")
+            elif not is_yes(adult):
                 reasons.append("adult not confirmed")
             signer = get(row, "Signer type").lower()
-            if signer not in allowed_signers:
-                reasons.append(f"signer type '{signer or 'blank'}'")
+            if not signer:
+                blank.append("Signer type")
+            elif signer not in allowed_signers:
+                reasons.append(f"signer type '{signer}'")
             for col in CONSENT_COLUMNS:
-                if not is_yes(get(row, col)):
+                value = get(row, col)
+                if not value:
+                    blank.append(col)
+                elif not is_yes(value):
                     reasons.append(f"no {col.lower()}")
+            if blank:
+                warnings.append(f"{ref}: blank {', '.join(blank)} (included; check consent)")
 
         age, age_group, upper = age_info(get(row, AGE_COLUMN[layout]))
         if upper is not None and upper < 18:
             reasons.append("under 18")
 
         phone = normalise_phone(get(row, PHONE_COLUMN[layout]))
-        if not phone:
-            reasons.append("no WhatsApp number")
-        elif phone in seen_phones:
+        if phone and phone in seen_phones:
             reasons.append(f"same WhatsApp number as {seen_phones[phone]}")
 
         if reasons:
-            excluded.append({"consent_reference": ref, "reasons": "; ".join(reasons)})
+            excluded.append({"consent_reference": ref, "reasons": "; ".join(dict.fromkeys(reasons))})
             continue
 
         seen_phones[phone] = ref

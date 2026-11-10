@@ -1,0 +1,131 @@
+{
+  "version": "0.0.0.1",
+  "target": "masakhane.zazoai.com",
+  "files": [
+    {
+      "path": "index.php",
+      "size": 5501,
+      "sha256": "80c47e1aade1933b5783f4dc17ec1b34756ce79e614ffa1f41400a39eea5bf81"
+    },
+    {
+      "path": "README.txt",
+      "size": 1017,
+      "sha256": "e4661522fdefc9f42dc46bc5eb279fefb5d99ebe3109efbbcd0fea3ba61b37b8"
+    },
+    {
+      "path": "install.php",
+      "size": 5871,
+      "sha256": "0c483875887eb437f26f6505fbb5d89c55e11b1a15e13ea2727cb42162b215e7"
+    },
+    {
+      "path": ".htaccess",
+      "size": 601,
+      "sha256": "b855b10afc6c761539e288af11c92298a8fb3d41d4b3b6f515662ea2845272d2"
+    },
+    {
+      "path": "app/index.php",
+      "size": 37,
+      "sha256": "696138b31bbb2a20c4bb53eb98b68dbe25557947dd6a7513c81e1c8b9446ce0d"
+    },
+    {
+      "path": "app/schema.php",
+      "size": 4654,
+      "sha256": "044d7eca08d867e8b4714c132b4d44c54053fa082f4ea39415d23012be534c81"
+    },
+    {
+      "path": "app/admin_pages.php",
+      "size": 10000,
+      "sha256": "ecd78eab2235d382d4c4c60621f39c7a827383f31ebd757f9bca1e3fc22e519a"
+    },
+    {
+      "path": "app/integration.php",
+      "size": 8852,
+      "sha256": "0f18a1de69853cb53a266f9137dd5580a8412267eba930df5f88e917bee26be9"
+    },
+    {
+      "path": "app/pages.php",
+      "size": 26579,
+      "sha256": "c892f351d44f24bf9b602e91b1dc0442dc92d25beb6cc645c3fabbdff3c8a022"
+    },
+    {
+      "path": "app/view.php",
+      "size": 8240,
+      "sha256": "ecb2ec15c9a0bfbebaefb2711babbd1c3f159604989c672757749ea6256af876"
+    },
+    {
+      "path": "app/bootstrap.php",
+      "size": 6234,
+      "sha256": "eb71c57d2a72caaac7c9aab0c378b2e9921088009cc9b07cb432357d833a46e3"
+    },
+    {
+      "path": "app/actions.php",
+      "size": 5866,
+      "sha256": "93836981e261280f4f96207a012c9e30869105da4ae11f488808c22de2e8d75d"
+    },
+    {
+      "path": "app/selfcheck.php",
+      "size": 1245,
+      "sha256": "27f1541127729f9ca8e664b6fa4d86a981c413271c1c62d2ac54efdd1047549f"
+    },
+    {
+      "path": "app/.htaccess",
+      "size": 19,
+      "sha256": "fa28d421a28ed9b6f4b997d5119c2b8adbacff6e2dd119a179b71230f9664934"
+    },
+    {
+      "path": "cron/index.php",
+      "size": 37,
+      "sha256": "696138b31bbb2a20c4bb53eb98b68dbe25557947dd6a7513c81e1c8b9446ce0d"
+    },
+    {
+      "path": "cron/sync.php",
+      "size": 555,
+      "sha256": "4c6765fc53e6b041eefc7ec7ddab67f61818a61cd8caedec7ef34df33751a125"
+    },
+    {
+      "path": "cron/.htaccess",
+      "size": 19,
+      "sha256": "fa28d421a28ed9b6f4b997d5119c2b8adbacff6e2dd119a179b71230f9664934"
+    },
+    {
+      "path": "assets/app.js",
+      "size": 1542,
+      "sha256": "0f4e1c0ec81ed9c5399949a54c97f1f950ecb3ff49458ff9ed87115d95d8ffb3"
+    },
+    {
+      "path": "assets/app.css",
+      "size": 16243,
+      "sha256": "5fb51ed24b26efa5e9375c92f2a7af7fb966eb7598591598099f8ae8a0fd283d"
+    },
+    {
+      "path": "docs/HOSTINGER_DEPLOYMENT_GUIDE.md",
+      "size": 6700,
+      "sha256": "2207587d0da91ad838b387a88c6a789297bab992d225d62140ea12f81f762ec6"
+    },
+    {
+      "path": "docs/SECURITY_AND_LIMITATIONS.md",
+      "size": 1829,
+      "sha256": "a7bf6bcac68e93b766ef181a2f87e5a3f75fb76cacb97b49fc867f8b0bdfceae"
+    },
+    {
+      "path": "docs/PRODUCTION_GATEWAY_CONTRACT.md",
+      "size": 4240,
+      "sha256": "19cb92f41a13468bfd7cc6b1c7177505116cdef9f45ca70cd73c608694a1ea5d"
+    },
+    {
+      "path": "docs/.htaccess",
+      "size": 19,
+      "sha256": "fa28d421a28ed9b6f4b997d5119c2b8adbacff6e2dd119a179b71230f9664934"
+    },
+    {
+      "path": "private/index.php",
+      "size": 37,
+      "sha256": "696138b31bbb2a20c4bb53eb98b68dbe25557947dd6a7513c81e1c8b9446ce0d"
+    },
+    {
+      "path": "private/.htaccess",
+      "size": 19,
+      "sha256": "fa28d421a28ed9b6f4b997d5119c2b8adbacff6e2dd119a179b71230f9664934"
+    }
+  ]
+}

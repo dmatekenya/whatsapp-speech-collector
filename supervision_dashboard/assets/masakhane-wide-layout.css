@@ -1,0 +1,33 @@
+/* Masakhane Speech Quality - site-wide content width, Ver. 0.0.0.1 */
+:root {
+  --masakhane-content-width: 1560px;
+  --page-max-width: 1560px;
+  --content-max-width: 1560px;
+  --container-max-width: 1560px;
+}
+@media (min-width: 1024px) {
+  /* Covers common page-shell names without changing cards or the sidebar. */
+  main :is(.page-container,.page-wrapper,.page-inner,.content-container,
+       .content-wrapper,.content-inner,.dashboard-container,.main-container,
+       .page-content,.page-shell,.wrap,.container) {
+    max-width: var(--masakhane-content-width) !important;
+  }
+  main > :is(.page-container,.page-wrapper,.page-inner,.content-container,
+       .content-wrapper,.content-inner,.dashboard-container,.main-container,
+       .page-content,.page-shell,.wrap,.container),
+  .masakhane-wide-content {
+    box-sizing: border-box !important;
+    width: calc(100% - 44px) !important;
+    max-width: var(--masakhane-content-width) !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    min-width: 0 !important;
+  }
+}
+@media (max-width: 1023px) {
+  .masakhane-wide-content {max-width: 100% !important; min-width: 0 !important;}
+}
+/* Wide tables remain accessible on smaller displays. */
+.masakhane-wide-content :is(.table-responsive,.table-wrap,.table-container) {
+  max-width: 100%; overflow-x: auto;
+}

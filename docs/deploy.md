@@ -41,7 +41,7 @@ values from `.env.production.example`. If the droplet's `.env` uses other names,
 4. [Starting a new collection run](#4-starting-a-new-collection-run)
 5. [Testers and participants](#5-testers-and-participants): add, override targets, reset, tester
    to contributor, returning contributors
-6. [ASR batch (Modal)](#6-asr-batch-modal)
+6. [ASR batch (Modal)](#6-asr-batch-modal): transcription and tier-2 scoring
 7. [Troubleshooting](#7-troubleshooting)
 8. [Local development](#8-local-development)
 
@@ -564,6 +564,8 @@ cd /home/dun/WhatsApp-speech-collector
      Settle it before any dataset release.
    - **Participants:** a phone number that is already registered is reported as a duplicate and
      not added; that person keeps their ID and their recorded minutes (see 5.4 and 5.5).
+   - **Welcome:** add `--send-welcome` to the real (not dry-run) participant import to send the
+     registration welcome to the participants it creates, or send it separately afterwards (4.7).
 3. **Check what's active now:**
 
    ```bash
@@ -584,11 +586,25 @@ docker compose exec postgres psql -U speech -d speech_collector -c \
   "update participants set status = 'completed' where batch = '<previous-run>';"
 ```
 
-### 4.7 Smoke test and launch
+### 4.7 Smoke test, welcome and launch
 
-1. From a test participant's phone, send **Hi** to +1 618-602-0282. The summary should show the
-   run's target (e.g. 20 minutes, in four lines). Record one clip.
-2. Check **on the droplet**:
+New participants haven't written to the bot yet, so the bot can only reach them with an approved
+WhatsApp **template**: `registration_welcome` ("Hello {first name}, you are registered ... Your
+target is {N} minutes ... reply Hi to start"). It goes out on the Meta number. Its name, language
+and whether imports send it automatically are in `config/welcome.yaml`.
+
+1. **Check the template is Active** in WhatsApp Manager (Account tools → Message templates). Until
+   then every send fails with a Meta error (e.g. 132001) and nothing is retried.
+2. **Try it on a tester first** (testers are skipped unless you add `--include-test`; `--force`
+   sends even if they have already written to the bot or had it before). **On the droplet:**
+
+   ```bash
+   docker compose exec api python -m scripts.send_welcome --include-test --participants <tester ID> --force
+   ```
+
+3. From the tester's phone, reply **Hi** to +1 618-602-0282. The summary should show the run's
+   target (e.g. 20 minutes, in four lines). Record one clip.
+4. Check **on the droplet**:
 
    ```bash
    docker compose logs -f api worker
@@ -596,8 +612,28 @@ docker compose exec postgres psql -U speech -d speech_collector -c \
      "select id, channel, status from outbound_messages order by id desc limit 3;"   # meta, delivered or read
    ```
 
-3. Brief participants: save **+1 618-602-0282**, send **Hi** to start, and who to contact with
-   problems.
+5. **Welcome the run's participants**, looking first:
+
+   ```bash
+   docker compose exec api python -m scripts.send_welcome --dry-run --batch <run>    # IDs, first names, targets
+   docker compose exec api python -m scripts.send_welcome --batch <run>
+   ```
+
+   It sends to active, non-test participants who have never been sent the welcome and have never
+   written to the bot, and prints each one as sent, failed (with Meta's error) or skipped (and
+   why). It exits with an error if any send failed. Run it again to retry the failed ones: those
+   already sent are skipped. `--participants P0008,P0009` limits it to some participants;
+   `--force` resends to them.
+6. Brief participants: save **+1 618-602-0282**, reply **Hi** to the welcome (or send Hi) to start,
+   and who to contact with problems.
+
+Each welcome is an `outbound_messages` row with purpose `template:registration_welcome`; the webhook
+updates it to delivered or read:
+
+```bash
+docker compose exec postgres psql -U speech -d speech_collector -c \
+  "select participant_id, status, error_code, sent_at from outbound_messages where purpose = 'template:registration_welcome' order by id;"
+```
 
 ### 4.8 Daily checks during the run
 
@@ -834,6 +870,76 @@ docker compose exec postgres psql -U speech -d speech_collector -c \
 - **Redo with the same model** (e.g. after changing its revision and redeploying):
   `./scripts/asr_batch.sh --force`. New rows are added; the latest per model counts.
 
+### Tier-2 scoring (step 2)
+
+After each ASR batch, the droplet scores the clips it transcribed: a few metrics per clip (SNR,
+words per second, model confidence, repeated phrases; for sentences, CER against the prompt) and a
+level from 1 to 4. The level is stored in `recordings.qc_tier2`, and the details in `qc_results`.
+It runs on the droplet's CPU. It never rejects a clip, never changes `qc_status`, and sends
+nothing to participants. A scoring error doesn't fail the ASR batch: those clips are scored next
+time. The design and the levels are in `docs/methodology.md` (section 8). The cut-offs are in
+`config/qc_tier2.yaml`.
+
+**First time** (the update that adds it), **on the droplet**:
+
+1. Take a backup, then update. `deploy.sh` rebuilds the image (new packages: numpy, jiwer) and
+   applies the migration (`b4e81c6d2a57`):
+
+   ```bash
+   cd /home/dun/WhatsApp-speech-collector
+   ./scripts/backup_db.sh
+   ./scripts/deploy.sh
+   docker compose logs migrate --tail 5      # "Running upgrade f3a7c2d9e816 -> b4e81c6d2a57"
+   ```
+
+2. Score the clips transcribed so far, looking first:
+
+   ```bash
+   docker compose exec api python -m scripts.score_tier2 --dry-run   # computes and prints; writes nothing
+   docker compose exec api python -m scripts.score_tier2
+   ```
+
+   It prints a report: clips and minutes per task type and level, the most common reasons,
+   metric distributions, the sentences with the highest CER, and levels per participant (IDs
+   only).
+
+**Any time:**
+
+```bash
+docker compose exec api python -m scripts.score_tier2 --report-only                # report from stored results
+docker compose exec api python -m scripts.score_tier2 --report-only --sample 10    # + a listening list
+docker compose exec api python -m scripts.score_tier2 --participants P0012 --since 2026-11-10
+```
+
+`--sample 10` writes `data/qc/tier2-sample-<thresholds_version>.csv`. It lists up to 10 clips per
+task type and level, chosen at random with a fixed seed, with their IDs, level, reason, metrics
+and WAV path (relative to `data/audio`). Copy it and the clips to your Mac to listen (**on your
+Mac**):
+
+```bash
+rsync -av dun@bot.zazoai.com:/home/dun/WhatsApp-speech-collector/data/qc/ ~/speech-collector-qc/
+```
+
+Test participants are left out unless you add `--include-test`. Only one scoring run at a time:
+a second one says so and exits. Scoring after an ASR batch skips while another run is going, and
+the next run picks those clips up.
+
+**Change the cut-offs** (e.g. after listening to the sample):
+
+1. Edit `config/qc_tier2.yaml` **on the droplet** with `nano`. It is mounted into the containers
+   like `config/asr_batch.yaml`, so no rebuild is needed. Set a new `thresholds_version`, e.g.
+   `2026-11-20`.
+2. Re-score everything with the new cut-offs. New rows are added and the old ones are kept, so
+   the versions can be compared. `qc_tier2` shows the latest.
+
+   ```bash
+   docker compose exec api python -m scripts.score_tier2 --rescore --dry-run
+   docker compose exec api python -m scripts.score_tier2 --rescore
+   ```
+
+3. Copy the edited file into the repo on your Mac and commit it, as for `config/asr_batch.yaml`.
+   Otherwise `./scripts/deploy.sh` may stop at `git pull`.
+
 ---
 
 ## 7. Troubleshooting
@@ -847,6 +953,9 @@ docker compose exec postgres psql -U speech -d speech_collector -c \
 | Webhook verification fails in Meta | Verify token differs, or the app isn't deployed yet | `META_VERIFY_TOKEN` matches what you typed in Meta; run the 403 check in 3.1 |
 | Replies `failed`, error `(#10)` | The token's System User lacks rights | Admin role, full control of the app and WhatsApp account, then a new token |
 | Replies `skipped_window` | The participant's last message is over 23.5 h old | Expected: they need to message first |
+| Welcome `failed`, error 132001 | Template not found under that name and language | Active in WhatsApp Manager? Name and `language` in `config/welcome.yaml` match it exactly (`en` vs `en_US`) |
+| Welcome `failed`, error 132000 | Wrong number of values | The approved body must have exactly {{1}} (first name) and {{2}} (minutes) |
+| Welcome `failed`, error 132015 or 132016 | Template paused or disabled by Meta (quality) | Check it in WhatsApp Manager; edit or resubmit |
 | Worker errors "column ... does not exist" | Migration not applied | `./scripts/deploy.sh` (droplet) or `uv run alembic upgrade head` (laptop) |
 | `migrate` exits with an error after a rollback ("Can't locate revision") | The database is newer than the code | Downgrade with the newer code first, or restore an older backup (2.2) |
 | Old settings still in effect | Containers weren't recreated | `docker compose up -d --force-recreate api worker` |

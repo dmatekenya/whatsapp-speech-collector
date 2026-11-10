@@ -5,6 +5,12 @@ change they belong to; the send_outbound job (RQ queue "outbound") sends them
 afterwards. A row is sent at most once: the job only acts on rows still
 pending, and (inbound_message_id, purpose) is unique, so a retried turn can't
 create a second reply.
+
+Template messages (purpose "template:<name>", e.g. the registration welcome in
+src/registry/welcome.py) answer nothing: they have no inbound message, go to
+the participant's registered number, and are exempt from the 24-hour window
+check, which WhatsApp allows for approved templates. Their template, language
+and body values are in message_keys[0].
 """
 
 import copy
@@ -29,7 +35,14 @@ from src.conversation.states import IN_SESSION
 from src.logging_config import mask_phone
 from src.media.urls import MediaUrlError, build_media_url
 from src.storage.db import get_sync_sessionmaker
-from src.storage.models import Assignment, ConversationState, InboundMessage, OutboundMessage, TaskSession
+from src.storage.models import (
+    Assignment,
+    ConversationState,
+    InboundMessage,
+    OutboundMessage,
+    Participant,
+    TaskSession,
+)
 from src.tasks.bank import AssignmentClosedError, end_session, mark_sent
 from src.tasks.config import get_collection_config
 
@@ -44,6 +57,12 @@ SEND_RETRY = Retry(max=4, interval=[10, 60, 300, 1800])
 # WhatsApp's limit for an image caption.
 CAPTION_LIMIT = 1024
 STATUS_ROUTE = "/whatsapp/status"
+# purpose of a template message: TEMPLATE_PREFIX + the template's name.
+TEMPLATE_PREFIX = "template:"
+
+
+def is_template(outbound: OutboundMessage) -> bool:
+    return outbound.purpose.startswith(TEMPLATE_PREFIX)
 
 
 # =========
@@ -170,9 +189,16 @@ def status_callback_url(channel: str = TWILIO) -> str | None:
 
 
 def _recipient(db: Session, outbound: OutboundMessage) -> str:
-    sender = db.scalar(
-        select(InboundMessage.sender).where(InboundMessage.id == outbound.inbound_message_id)
-    )
+    """The number a message goes to: the sender of the message it answers, or for a
+    message that answers nothing (a template), the participant's registered number."""
+    if outbound.inbound_message_id is None:
+        sender = db.scalar(
+            select(Participant.phone_number).where(Participant.participant_id == outbound.participant_id)
+        )
+    else:
+        sender = db.scalar(
+            select(InboundMessage.sender).where(InboundMessage.id == outbound.inbound_message_id)
+        )
     if not sender:
         raise LookupError(f"No recipient for outbound id={outbound.id}")
     return sender
@@ -184,6 +210,8 @@ def _last_attempt() -> bool:
 
 
 def _next_in_turn(db: Session, outbound: OutboundMessage) -> OutboundMessage | None:
+    if outbound.inbound_message_id is None:
+        return None  # a template message is a turn of its own
     return db.scalar(
         select(OutboundMessage)
         .where(
@@ -226,6 +254,8 @@ def _not_delivered(db: Session, outbound: OutboundMessage, status: str, now: dat
     its turn, and put the conversation back as it was before that turn."""
     outbound.status = status
     outbound.status_updated_at = now
+    if outbound.inbound_message_id is None:
+        return  # a template message: no rest of a turn, no conversation to restore
     # The rest of the reply goes out in order or not at all.
     for later in db.scalars(
         select(OutboundMessage).where(
@@ -257,6 +287,9 @@ def send_outbound(
     conversation goes back to its state before this turn, so the
     participant's next message repeats the step.
 
+    Template messages skip the window check (WhatsApp allows them outside the
+    window) and go out with the adapter's send_template.
+
     The next message in the same turn is queued after this one is sent, so a
     long text always arrives before its image. Called with a channel
     (simulator, tests), the rest of the turn is sent straight away.
@@ -269,9 +302,10 @@ def send_outbound(
             return None
         to = _recipient(db, outbound)
 
+        template = is_template(outbound)
         window = get_collection_config().reply_window_hours
-        age = _hours_since_last_message(db, to, outbound.channel, now)
-        if age is None or age > window:
+        age = None if template else _hours_since_last_message(db, to, outbound.channel, now)
+        if not template and (age is None or age > window):
             outbound.error = (
                 f"Not sent: the participant's last message on this channel was "
                 f"{'never' if age is None else f'{age:.1f} h ago'} (reply window {window:g} h)"
@@ -284,7 +318,9 @@ def send_outbound(
         adapter = channel or get_channel(outbound.channel)
         callback = status_callback_url(outbound.channel)
         try:
-            if outbound.media_prompt_id:
+            if template:
+                sid = _send_template(adapter, to, outbound)
+            elif outbound.media_prompt_id:
                 url = build_media_url(outbound.media_prompt_id)
                 sid = adapter.send_media(to, url, caption=outbound.body or None, status_callback=callback)
             else:
@@ -339,6 +375,16 @@ def send_outbound(
         else:
             enqueue_send(following_id)
     return sid
+
+
+def _send_template(adapter: ChannelAdapter, to: str, outbound: OutboundMessage) -> str:
+    """Send a template row: name, language and body values from message_keys[0]."""
+    send = getattr(adapter, "send_template", None)
+    if send is None:
+        raise MessageSendError(f"Templates can't be sent on the {outbound.channel} channel", permanent=True)
+    spec = (outbound.message_keys or [{}])[0]
+    name = spec.get("template") or outbound.purpose.removeprefix(TEMPLATE_PREFIX)
+    return send(to, name, spec.get("language") or "", list(spec.get("params") or []))
 
 
 # ================================

@@ -1,6 +1,6 @@
 # Chichewa Speech Collection via WhatsApp — Methodology and Design Decisions
 
-Living document. Last updated: 2026-11-05. Covers the smartphone (SR) collection channel run through
+Living document. Last updated: 2026-11-10. Covers the smartphone (SR) collection channel run through
 the WhatsApp bot ("Tiyankhuleni"). Will feed the final methodology and QA documentation (work plan
 Phase 5). Update it whenever a design decision changes; add a row to the decision log at the end.
 Repo copy: `docs/methodology.md`.
@@ -39,6 +39,10 @@ live in the separate prompt creation guide.
   Spark 10, iPhone 12). This is the only source of device details: neither WhatsApp nor the Meta
   Cloud API says which device a voice note was recorded on. It is self-reported and describes the
   participant's usual device, not each recording.
+- **Registration welcome.** After import, each new participant is sent a WhatsApp welcome (a
+  utility template, `registration_welcome`) with their first name and total target in minutes, and
+  is asked to save the number and reply Hi. It is sent once per participant (only resent on
+  request), and not to participants who have already written to the bot.
 - **Only registered numbers take part.** An unregistered number gets one reply saying so; none of
   its messages or recordings are kept.
 - **Identity in the data.** Recordings are linked only to the participant ID; names and phone
@@ -49,8 +53,11 @@ live in the separate prompt creation guide.
 - **Why WhatsApp:** participants already use it daily (little training), and in Malawi people buy
   cheap WhatsApp-only data bundles, so recording costs them little. Everything stays inside
   WhatsApp (no links).
-- **User-initiated only.** The bot only replies to participants' messages, so all messages fall in
-  WhatsApp's free 24-hour service window; no paid template messages are used.
+- **User-initiated, plus one welcome.** The bot only replies to participants' messages, so all
+  conversation messages fall in WhatsApp's free 24-hour service window. The one exception is the
+  registration welcome (section 2): participants haven't written yet, so it is an approved utility
+  template, which WhatsApp allows outside the window and charges for (under about US$0.01 per
+  message). The 24-hour check still applies to every other message.
 - **Provider.** Piloted with Twilio; moving to the Meta WhatsApp Cloud API direct (lower cost,
   voice-note and forwarded flags, no media clean-up). During the move both run side by side and
   replies always go out on the number the participant wrote to. From the pilot (starting
@@ -206,6 +213,10 @@ Recordings are classified at two levels:
 
 ## 8. Quality control
 
+- **Three tiers of checks.** Tier 1: arrival checks (below), recorded in `recordings.qc_status`
+  and `qc_reason`; this column is tier 1 and is not changed by later tiers. Tier 2: the daily ASR
+  batch (step 2 below), recorded in `recordings.qc_tier2` and `qc_results`. Tier 3: human review
+  by supervisors (dashboard; planned). A final label combining the three is planned.
 - **On arrival (worker and conversation engine):** the worker measures duration and speech levels
   on the WAV and applies the default audio-origin rule and long flag; once the clip is matched to
   a prompt, the engine applies the task type's rules: audio origin, empty audio, duplicates,
@@ -238,7 +249,6 @@ Recordings are classified at two levels:
   duration, % too short or too long, retake rate, forwarded attempts). Participants who
   consistently rush, cut off or run long are followed up by a supervisor; automatic nudges from the
   bot may come later.
-- **Planned fast QC (CPU):** clipping, voice activity, SNR estimate.
 - **Planned daily batch job (CPU):** run over each day's recordings: speech/noise detection with a
   stronger voice activity model (e.g. Silero VAD) to catch loud non-speech clips; speaker
   consistency checks (uploaded and forwarded clips first); and the duration report. Results feed supervisor
@@ -267,8 +277,101 @@ Recordings are classified at two levels:
     - Tested on real 60–120 s clips with both models before it was enabled.
     - A result for a long clip from an app without long-form (i.e. not yet redeployed) is not
       stored, so the clip is retried.
-  - **Step 2, scoring (next):** compare read speech against the prompt (CER/WER) to accept, send
-    to human review, or reject.
+  - **Step 2, scoring (being built):** measures every transcribed clip on the droplet's CPU, with
+    no GPU. A deliberately short set of metrics: each one catches a specific problem that can be
+    confirmed by listening to the clip.
+
+    **All recordings: audio**
+
+    | Metric | Unit | What it catches | Stored in |
+    |---|---|---|---|
+    | `duration_s` | seconds | too short or too long (enforced on arrival) | `recordings` (exists) |
+    | speech ratio | 0–1 | mostly silence, long pauses, recorder left running | computed from `recordings.active_seconds` ÷ `duration_s` (both exist) |
+    | `mean_dbfs` | dBFS | speaker too quiet or far from the phone | `recordings` (exists; overall level, including pauses) |
+    | `snr_db` | dB | background noise (traffic, market, TV, wind) | new column on `recordings`: WADA-SNR estimate |
+
+    **All recordings: transcript** (from the latest `whisper_b` transcript)
+
+    | Metric | Unit | What it catches | Stored in |
+    |---|---|---|---|
+    | `word_count` | words | empty or near-empty answers | `qc_results` |
+    | `words_per_second` | words ÷ `active_seconds` | very slow: hesitant or partly silent; very fast: often text the model invented | `qc_results` |
+    | `avg_logprob` | log-probability (closer to 0 = surer) | model unsure: noise, mumbling, another language | `transcripts` (exists; empty for long-form clips over 30 s) |
+    | `compression_ratio` | ratio, ~1–2 normal | repeated phrases from model hallucination (Whisper treats > 2.4 as suspect) | `qc_results` |
+
+    **Sentences only** (transcript vs the prompt text sent, `assignments.prompt_text_snapshot`;
+    both normalised with the training normaliser)
+
+    | Metric | Unit | What it catches | Stored in |
+    |---|---|---|---|
+    | `cer` | 0–1+ | the main measure of whether the right sentence was read | `qc_results` |
+    | `wer` | 0–1+ | reported alongside CER, not used for decisions | `qc_results` |
+    | `length_ratio` | transcript ÷ prompt characters | explains a high CER: well below 1 = stopped early; above 1 = extra speech | `qc_results` |
+    | `has_digits` | true/false | prompt contains numbers: `whisper_b` writes numbers as words, so CER is unreliable; such clips go no further than review | `qc_results` |
+
+    - **Where results live:** facts about the audio itself, which never change, stay on
+      `recordings` next to the arrival measurements (new: `snr_db`). Everything that depends on a
+      transcript, a model or the normaliser goes into a new table, `qc_results`: one row per
+      scoring run per recording, with one column per metric (`word_count`, `words_per_second`,
+      `compression_ratio`; for sentences `cer`, `wer`, `length_ratio`, `has_digits`), plus
+      `recording_id`, `transcript_id`, `stage` (`asr`), `band`, `band_reason`, `metrics_version`,
+      `thresholds_version` and `created_at`. Inputs that already exist are not copied
+      (`duration_s`, `active_seconds`, `mean_dbfs`, `snr_db` on `recordings`; `avg_logprob` in
+      `transcripts`).
+    - **Which clips:** stored clips not rejected on arrival, with a `whisper_b` transcript, that
+      answer a prompt or free-speech invitation. Unassigned recordings (sent outside a session)
+      are never counted and are not scored (`qc_tier2` stays empty); nor are test participants'
+      clips, unless asked for.
+    - **Order:** `snr_db` for clips without it; then, per clip with a new transcript, the metrics,
+      the band from the rules, a new `qc_results` row, and in the same transaction the band copied
+      to `recordings.qc_tier2`. Re-scoring after a cut-off change repeats the last steps with a new
+      `thresholds_version` and adds rows rather than overwriting, so versions can be compared;
+      `qc_tier2` always shows the latest.
+    - **Not measured:** clipping (rare after WhatsApp's own audio processing) and a separate
+      speech-only level (the speech ratio already covers pauses). Either can be added later if
+      calibration shows a need.
+    - **Limitations:** WhatsApp's noise suppression can make SNR look better than the room was, so
+      SNR is used to rank clips and its cut-offs are calibrated on our data. `active_seconds` is
+      energy-based and counts any loud sound, not only speech.
+    - **Tier-2 level (`qc_tier2`):** a whole number from 1 to 4 (empty = not scored yet), stored
+      as `qc_results.band` and copied to `recordings.qc_tier2`. Each level leads to a different
+      action; the values deliberately differ from `qc_status` so the two can't be confused.
+
+      | Level | Meaning | Action |
+      |---|---|---|
+      | 4 | All signals good | Usable as is (Silver) |
+      | 3 | Acceptable, one borderline signal | Usable (Silver), spot-checked more often |
+      | 2 | A clear concern | Review queue (stays Bronze) |
+      | 1 | Probably unusable | Top of the review queue (stays Bronze) |
+
+      **Weakest link:** each metric gets its own level from its cut-offs, and the clip's level is
+      the lowest of them, so no weights are needed and one bad signal is enough to send a clip for
+      review. `band_reason` lists the metric(s) at that lowest level, e.g. `cer:2` or
+      `compression_ratio:1,word_count:1`, so a reviewer knows what to listen for. A metric that
+      doesn't apply or is missing (CER outside sentences, `avg_logprob` for long-form clips) is
+      skipped. Tier 2 never rejects: even level 1 waits for a human.
+
+      **Cut-offs (provisional, `thresholds_version` 2026-11-10-provisional; to be calibrated on
+      pilot data by listening to a sample per level and task type):**
+
+      | Metric | Applies to | 4 | 3 | 2 | 1 |
+      |---|---|---|---|---|---|
+      | `cer` | sentences | ≤ 0.10 | ≤ 0.15 | ≤ 0.40 | > 0.40 |
+      | `has_digits` | sentences | — | — | true caps the clip at 2 | — |
+      | `word_count` | all | — | — | under 5 words (spontaneous types) | 0 words |
+      | `compression_ratio` | all | ≤ 2.0 | ≤ 2.4 | — | > 2.4 |
+      | `words_per_second` | all | 0.8–3.5 | 0.5–0.8 or 3.5–4.5 | under 0.5 or over 4.5 | — |
+      | `avg_logprob` | all (if present) | ≥ −0.5 | −1.0 to −0.5 | under −1.0 | — |
+      | `snr_db` | all | ≥ 20 | 10–20 | under 10 | — |
+      | speech ratio | all | ≥ 0.4 | 0.2–0.4 | under 0.2 | — |
+      | `mean_dbfs` | all | ≥ −35 | −40 to −35 | under −40 | — |
+
+      `wer` and `length_ratio` are reported but set no level (CER already covers them; the length
+      ratio explains a high CER). Sources for the starting values: the 2026-11-05 model comparison
+      for CER (matching clips 0.00–0.26, wrong sentences 0.43–0.92); Whisper's own defaults for
+      compression ratio (2.4) and log-probability (−1.0); clean-audio SNR from 20 dB as used for
+      NaijaVoices; the arrival check's 20% for the speech ratio. Cut-offs live in a config file
+      with the version, so a change is a re-score, not a code change.
 - **Planned speaker check:** compare uploaded and forwarded clips (and later all clips) with a voice profile
   built from the participant's own recorded voice notes (speaker embeddings); also near-duplicate
   checks. Human review by supervisors.
@@ -321,4 +424,7 @@ Recordings are classified at two levels:
 | 2026-11-07 | Per-task clip limits: sentences flagged > 30 s, rejected > 45 s; pictures/questions/free speech up to 60 s, older voice notes/uploads in free speech up to 120 s; aim 15–30 s; long clips kept, flagged and split before training; ASR uses long-form transcription for clips > 30 s (being tested; until then the ASR batch skips them). Supersedes the planned "read faster, then skip" handling of too-long sentences |
 | 2026-11-08 | Long-form ASR enabled for clips over 30 s (tested with both models on a 90 s clip: about 0.1 real-time factor, nothing cut off); segment texts joined with a space; `transcripts.long_form` filled; the ASR batch no longer skips long clips |
 | 2026-11-07 | Long, mostly silent clips: over 30 s with under 20% active audio rejected as `no_speech` (retake), so they can't count in full |
+| 2026-11-09 | Registration welcome: a utility template (`registration_welcome`, first name and total target in minutes) sent once to each new participant after import, since they haven't written to the bot yet; the only paid message type (under about US$0.01 each); exempt from the 24-hour check, which still applies to all other messages |
+| 2026-11-10 | ASR step 2 metrics agreed: audio (duration, speech ratio, mean level, SNR), transcript (word count, words per second, average log-probability, compression ratio), sentences (CER main, WER, length ratio, digits flag; prompts with numbers capped at review). Audio facts stay on `recordings` (new `snr_db`); transcript-based metrics go into a new `qc_results` table (one column per metric), one row per scoring run; the band is mirrored to a new `recordings.qc_tier2`. `qc_status` is tier 1 and is not changed by later tiers. Clipping not measured. The batch never rejects on its own |
+| 2026-11-10 | Tier-2 levels 1–4 (4 good, 3 borderline, 2 review, 1 probably unusable), combined by weakest link across metrics with the limiting metric(s) recorded; provisional cut-offs in config, calibrated on pilot data |
 | 2026-11-08 | Bot instructions shortened, since contributors get a full guide: three general tips (quiet place and pauses, swipe-reply to redo, PROGRESS) and one or two lines per task type with its length limit; no change to behaviour |

@@ -36,6 +36,8 @@ class ParticipantImporter(BatchImporter):
         self.source_file = source_file
         # Batch for rows without a batch value; the file name without extension if not given.
         self.batch = batch or Path(source_file).stem
+        # Participants this import created (filled by apply; empty on a dry run).
+        self.new_ids: list[str] = []
         self.today = today or date.today()
         self.id_options = config.options["id"]
         self.id_column = self.id_options["column"]
@@ -149,6 +151,7 @@ class ParticipantImporter(BatchImporter):
                 )
             )
             ids[row.number] = participant_id
+            self.new_ids.append(participant_id)
         session.flush()
         return ids
 

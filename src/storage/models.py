@@ -9,7 +9,9 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
@@ -198,6 +200,7 @@ class Recording(Base):
         CheckConstraint(_in_check("forwarded", FORWARDED_VALUES), name="ck_recordings_forwarded"),
         CheckConstraint(_in_check("audio_origin", AUDIO_ORIGINS), name="ck_recordings_audio_origin"),
         CheckConstraint(_in_check("length_flag", LENGTH_FLAGS), name="ck_recordings_length_flag"),
+        CheckConstraint("qc_tier2 BETWEEN 1 AND 4", name="ck_recordings_qc_tier2"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -260,6 +263,11 @@ class Recording(Base):
     # default outside a session). Information only, never a review flag: such clips are split
     # before training. None: within flag_over (or not measured).
     length_flag: Mapped[str | None] = mapped_column(Text)
+    # WADA-SNR estimate of the WAV (dB), set by tier-2 scoring (src/qc); an audio fact, computed once.
+    snr_db: Mapped[float | None] = mapped_column(Float)
+    # Tier-2 level 1-4: a copy of the latest qc_results.band (None: not scored). Tier 2
+    # never changes qc_status / qc_reason (tier 1).
+    qc_tier2: Mapped[int | None] = mapped_column(SmallInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -466,6 +474,8 @@ class Transcript(Base):
     __table_args__ = (
         CheckConstraint(_in_check("source", TRANSCRIPT_SOURCES), name="ck_transcripts_source"),
         Index("ix_transcripts_recording_source_model", "recording_id", "source", "model_key"),
+        # Lets qc_results reference (transcript, recording) as a pair (id alone is already unique).
+        UniqueConstraint("id", "recording_id", name="uq_transcripts_id_recording_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -483,6 +493,53 @@ class Transcript(Base):
     # None for older rows and other sources.
     long_form: Mapped[bool | None] = mapped_column(Boolean)
     batch_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("asr_batches.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+# =========
+# QC TIER 2
+# =========
+class QcResult(Base):
+    """One tier-2 scoring run of one recording (src/qc): the transcript-based metrics, the
+    level (band 1-4) and why. Rows are only added, never updated or deleted by the scorer;
+    the latest per recording is by created_at, then id. Audio facts that don't change
+    (duration_s, active_seconds, mean_dbfs, snr_db) stay on recordings, and avg_logprob on
+    the transcript."""
+
+    __tablename__ = "qc_results"
+    __table_args__ = (
+        # A result can only pair a recording with one of its own transcripts.
+        ForeignKeyConstraint(
+            ["transcript_id", "recording_id"],
+            ["transcripts.id", "transcripts.recording_id"],
+            name="fk_qc_results_transcript_recording",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("band BETWEEN 1 AND 4", name="ck_qc_results_band"),
+        Index("ix_qc_results_recording_created_id", "recording_id", "created_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    recording_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("recordings.id", ondelete="RESTRICT", name="fk_qc_results_recording_id"), nullable=False
+    )
+    transcript_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    stage: Mapped[str] = mapped_column(Text, nullable=False, server_default="asr")
+    word_count: Mapped[int | None]
+    words_per_second: Mapped[float | None] = mapped_column(Float)
+    compression_ratio: Mapped[float | None] = mapped_column(Float)
+    # Sentences only (None for other task types).
+    cer: Mapped[float | None] = mapped_column(Float)
+    wer: Mapped[float | None] = mapped_column(Float)
+    length_ratio: Mapped[float | None] = mapped_column(Float)
+    has_digits: Mapped[bool | None] = mapped_column(Boolean)
+    band: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    # The metric(s) at the lowest level, e.g. "cer:2" or "compression_ratio:1,word_count:1"; "all_ok" for 4.
+    band_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    thresholds_version: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

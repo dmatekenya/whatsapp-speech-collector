@@ -43,6 +43,8 @@ x-app: &app
     # the file (or git checkout) leaves the containers on the old copy until
     # `docker compose up -d --force-recreate api worker`.
     - ./config/asr_batch.yaml:/app/config/asr_batch.yaml:ro
+    # Tier-2 cut-offs, the same way: edit on the droplet, bump thresholds_version, re-score.
+    - ./config/qc_tier2.yaml:/app/config/qc_tier2.yaml:ro
   restart: unless-stopped
 
 services:

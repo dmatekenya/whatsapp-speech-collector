@@ -1,6 +1,6 @@
 # Database schema
 
-Last updated: 2026-10-18
+Last updated: 2026-11-10
 
 Postgres is the system of record. Files (audio, prompt images) live on disk in `data/`: in the
 repo locally, and on the droplet in `~/whatsapp-speech-collector/data/`, bind-mounted into the
@@ -24,6 +24,7 @@ relative to a configurable root. Schema changes are made only through Alembic mi
 | `outbound_messages` | Every message the bot sends, and its delivery status | `id` | **Yes** (bodies can contain first names) |
 | `asr_batches` | One row per run of the ASR batch (Modal transcription) | `id` | No |
 | `transcripts` | Transcripts of recordings: ASR per model and run (later human) | `id` | No (recording ID only; the text is the participant's speech) |
+| `qc_results` | Tier-2 quality results: metrics and a level 1-4 per scoring run per recording | `id` | No (IDs and numbers only) |
 | `alembic_version` | Which migrations have been applied (managed by Alembic) | | No |
 
 ## How they connect
@@ -44,6 +45,8 @@ erDiagram
   ASSIGNMENTS ||--o{ OUTBOUND_MESSAGES : "sent as"
   RECORDINGS ||--o{ TRANSCRIPTS : "transcribed as"
   ASR_BATCHES ||--o{ TRANSCRIPTS : wrote
+  RECORDINGS ||--o{ QC_RESULTS : "scored as"
+  TRANSCRIPTS ||--o{ QC_RESULTS : "scored from"
 ```
 
 A voice note's journey: `inbound_messages` (raw) → `recordings` (stored audio) → linked to an
@@ -107,6 +110,8 @@ and rejected views are produced by export.
 | `error` | text, nullable | |
 | `qc_status` | text, indexed | Whether the clip is usable: `pending`, `accepted`, `rejected`, `needs_review`. Rejected clips never count toward minutes; `needs_review` ones do |
 | `qc_reason` | text, nullable | `too_short`, `too_long` (limits per task type and origin, config `clip_limits`), `empty`, `no_speech` (under 1.5 s of active audio, or over 30 s with under 20% active) (failed attempts, rejected, set by the conversation engine); `low_speech` (accepted but mostly silence, `needs_review`); `not_recorded` (forwarded or uploaded audio outside free speech, rejected); `speaker_check_pending` (forwarded or uploaded audio in free speech, `needs_review`; also uploads accepted in any task type before 2026-11-07; kept if the clip is also low speech). The QC step will add e.g. `duplicate`, `wrong_sentence` |
+| `snr_db` | float, nullable | WADA-SNR estimate of the WAV (dB, −20 to 100), computed once by tier-2 scoring (`src/qc/metrics.py`). Null until scored, or if the WAV couldn't be read. Added by migration `b4e81c6d2a57` |
+| `qc_tier2` | smallint, nullable, check 1–4 | Tier-2 level: a copy of the latest `qc_results.band` (4 usable as is … 1 probably unusable). Null = not scored (also never for unassigned recordings). Never changes `qc_status` / `qc_reason`, which are tier 1. Added by migration `b4e81c6d2a57` |
 | `length_flag` | text, nullable | `long_sentence` or `long_clip`: longer than `flag_over` for its task type in `config/assignment_settings.yaml` (`clip_limits`; the default limits outside a session). Kept and counted in full; information for preprocessing (split before training), never a review flag (`qc_status` is unchanged). Null within the limit. Added by migration `f3a7c2d9e816`; older rows null (none was over 29 s) |
 | `created_at`, `updated_at` | timestamptz | |
 
@@ -222,7 +227,7 @@ recipient's number isn't stored here; it comes from the inbound message being an
 | `id` | bigint, PK | |
 | `participant_id` | FK → participants, nullable | Null for replies to unregistered numbers |
 | `inbound_message_id` | FK → inbound_messages | The message being answered. Unique with `purpose`: a retried job never sends the same reply twice |
-| `purpose` | text | `reply`; `reply_media` when an image prompt's caption is too long and the text goes first |
+| `purpose` | text | `reply`; `reply_media` when an image prompt's caption is too long and the text goes first; `template:<name>` for a template message (e.g. `template:registration_welcome`), which answers nothing: no `inbound_message_id`, sent to the registered number, exempt from the 24-hour check; its template, language and values are in `message_keys` |
 | `sequence` | int | Order within one turn; each message sent queues the next |
 | `message_keys` | JSONB | Catalog keys used, with variant indexes: `[{"key": "prompt.image_caption", "variant": 2}, …]` |
 | `body` | text | Exactly what was sent (or the image caption) |
@@ -259,8 +264,10 @@ One row per run of `scripts/asr_batch.py` (migration `9698f26aa068`). Settings i
 
 ### transcripts
 
-Several per recording over time: one per ASR model and run, later human transcripts. No unique
-constraint: a forced re-run adds a row; the latest per source and model is by `created_at`.
+Several per recording over time: one per ASR model and run, later human transcripts. A forced
+re-run adds a row; the latest per source and model is by `created_at`, then `id`. Unique on
+(`id`, `recording_id`) (added by `b4e81c6d2a57`), which `qc_results` references so a result can
+only pair a recording with its own transcript.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -274,11 +281,33 @@ constraint: a forced re-run adds a row; the latest per source and model is by `c
 | `batch_id` | FK → asr_batches, nullable, indexed | The batch that wrote it |
 | `created_at` | timestamptz | |
 
-## Planned tables
+### qc_results
 
-| Table | Purpose | Comes with |
+Tier-2 quality checks (ASR batch step 2, `src/qc/`; design in `docs/methodology.md` section 8).
+One row per scoring run per recording: rows are only added, never updated or deleted by the
+scorer, so re-scoring with new cut-offs keeps the old rows for comparison. The latest per
+recording is by `created_at`, then `id` (both descending), and its `band` is copied to
+`recordings.qc_tier2`. Audio facts that don't change (`duration_s`, `active_seconds`, `mean_dbfs`,
+`snr_db`) are read from `recordings` and `avg_logprob` from the transcript; they are not copied
+here. Added by migration `b4e81c6d2a57`.
+
+| Column | Type | Notes |
 |---|---|---|
-| `qc_results` | One row per check run on a recording (stage `fast`, `asr` or `human`): measurements (duration, loudness, clipping, silence, SNR, CER, transcript), decision, thresholds version | ASR batch step 2 (scoring) |
+| `id` | bigint, PK | |
+| `recording_id` | bigint, FK → recordings (ON DELETE RESTRICT) | A recording with results can't be deleted. Index on (`recording_id`, `created_at`, `id`) |
+| `transcript_id` | bigint | The transcript scored (the configured model's latest). Composite FK (`transcript_id`, `recording_id`) → transcripts (`id`, `recording_id`), ON DELETE RESTRICT: never another recording's transcript |
+| `stage` | text, default `asr` | |
+| `word_count` | int | Words in the normalised transcript |
+| `words_per_second` | float, nullable | `word_count` ÷ `active_seconds`; null if `active_seconds` is null or 0 |
+| `compression_ratio` | float, nullable | UTF-8 bytes ÷ zlib-compressed bytes of the transcript (as Whisper computes it); null if empty |
+| `cer`, `wer` | float, nullable | Sentences only: normalised transcript vs normalised `assignments.prompt_text_snapshot` (jiwer) |
+| `length_ratio` | float, nullable | Sentences only: normalised transcript characters ÷ normalised prompt characters |
+| `has_digits` | bool, nullable | Sentences only: the prompt text contains a digit (CER unreliable; level capped at 2) |
+| `band` | smallint, check 1–4 | The level, by the weakest link (`config/qc_tier2.yaml`) |
+| `band_reason` | text | The metric(s) at the lowest level, e.g. `cer:2`, `compression_ratio:1,word_count:1`; `all_ok` for 4 |
+| `metrics_version` | text | How the metrics were computed (`1`) |
+| `thresholds_version` | text | The cut-offs used (e.g. `2026-11-10-provisional`) |
+| `created_at` | timestamptz | |
 
 ## Files on disk
 
@@ -290,7 +319,8 @@ constraint: a forced re-run adds a row; the latest per source and model is by `c
 | `data/prompts/images/_prepared/<domain>/I0001.jpg` | WhatsApp-ready copies: JPEG, metadata stripped, resized |
 | `data/audio/<participant_id>/` | Original `.ogg` and 16 kHz `.wav` per recording |
 | `data/asr_batches/<batch_id>/results.jsonl` | Raw output from Modal per ASR batch (recording IDs and transcripts); `cron.log` on the droplet |
-| `config/` | Import rules and assignment settings (YAML) |
+| `data/qc/tier2-sample-<thresholds_version>.csv` | Tier-2 listening samples (`scripts/score_tier2.py --sample N`): recording, participant and prompt IDs, level, metrics, WAV path; no names or transcripts |
+| `config/` | Import rules, assignment settings, ASR batch and tier-2 cut-offs (`qc_tier2.yaml`) (YAML) |
 | `messages/bot_messages_en.yaml` | Bot message texts (Chichewa version later) |
 
 All of `data/` is gitignored.

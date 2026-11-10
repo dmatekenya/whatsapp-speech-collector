@@ -1,7 +1,7 @@
 """The ASR batch: select recordings, send them to Modal in chunks, store the transcripts.
 
-Step 1 of 2: transcripts only. Step 2 (scoring against the prompt text, QC
-results and the report) runs after a batch, from after_batch() below.
+Step 1 of 2: transcripts. Step 2, tier-2 scoring (src/qc), runs after each
+batch for the recordings it transcribed, from after_batch() below.
 """
 
 import json
@@ -251,8 +251,21 @@ def ran_in_slot(db: Session, slot_start: datetime) -> bool:
 
 
 def after_batch(session_factory: sessionmaker[Session], batch_id: int) -> None:
-    """Hook for step 2: score the new transcripts against the prompt text (CER/WER),
-    suggest bands, write qc_results and the report. Nothing yet."""
+    """Step 2: tier-2 scoring of the recordings this batch transcribed (src/qc/scoring.py).
+
+    A scoring error never fails the ASR batch: it is logged and the clips stay
+    unscored, so the next run (or scripts/score_tier2.py) picks them up.
+    """
+    try:
+        from src.qc.scoring import score_after_batch
+
+        score_after_batch(session_factory, batch_id)
+    except Exception as exc:  # noqa: BLE001 - the transcripts are stored; scoring can wait
+        logger.error(
+            "Batch %s: tier-2 scoring failed (%s); the clips stay unscored until the next run",
+            batch_id,
+            type(exc).__name__,
+        )
 
 
 def _payloads(chunks: list[list[Clip]], unreadable: dict[int, str]) -> Iterator[Chunk]:

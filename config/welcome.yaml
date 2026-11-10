@@ -1,0 +1,21 @@
+# ====================
+# REGISTRATION WELCOME
+# ====================
+# config/welcome.yaml: the WhatsApp welcome sent to newly registered participants
+# (scripts/send_welcome.py, or scripts/import_participants.py --send-welcome).
+# Read by src/registry/welcome.py.
+#
+# They haven't written to the bot yet, so WhatsApp only allows an approved message template
+# (outside the 24-hour window). It is sent on the Meta number, and the template must be Active
+# in WhatsApp Manager. Its body takes two values, in this order:
+#   {{1}} the participant's first name (first word of their name, capitalised);
+#   {{2}} their total target in minutes, as the bot shows it (e.g. 20).
+#
+# - template: the template's name in WhatsApp Manager.
+# - language: its language code there (en, not en_US, if that's how it was created).
+# - send_on_import: true makes every non-dry-run participant import send the welcome to the
+#   participants it creates (--no-send-welcome turns it off for one import; --send-welcome turns
+#   it on when this is false).
+template: registration_welcome
+language: en
+send_on_import: false

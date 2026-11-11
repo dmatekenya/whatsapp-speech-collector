@@ -58,7 +58,7 @@ function audit_db_columns(string $table): array {
 }
 function audit_schema_ready(): bool {
  $required=[
-  'review_drafts'=>['id','recording_id','reviewer_id','decision','created_at'],
+  'review_drafts'=>['id','recording_id','reviewer_id','decision','created_at','reason_code'],
   'recordings'=>['id','participant_id'],
   'supervisors'=>['id','display_name']
  ];
@@ -92,7 +92,7 @@ function audit_review_filters(): array {
  if(!in_array($prompt,['','sentence','image','free_speech','conversation_starter','unclassified'],true))$prompt='';
  $decision=audit_get('decision');
  // Historical escalations are visible for auditing; no escalation action is added.
- if(!in_array($decision,['','approve','reject','flag','escalate'],true))$decision='';
+ if(!in_array($decision,['','accept','reject','approve','flag','escalate'],true))$decision='';
  $state=audit_get('state');
  if(!in_array($state,['','draft','pending','confirmed','failed','conflict'],true))$state='';
  $from=audit_get('from');$to=audit_get('to');
@@ -133,7 +133,7 @@ function audit_notes_expr(): string {return audit_col('review_drafts','notes','d
 function audit_group_counters(): string {
  $state=audit_production_expr();
  return "COUNT(*) AS total_reviews, COUNT(DISTINCT d.recording_id) AS distinct_recordings, ".
-  "COALESCE(SUM(CASE WHEN d.decision='approve' AND $state='confirmed' THEN 1 ELSE 0 END),0) AS approved, ".
+  "COALESCE(SUM(CASE WHEN d.decision='accept' AND $state='confirmed' THEN 1 ELSE 0 END),0) AS approved, ".
   "COALESCE(SUM(CASE WHEN d.decision='reject' AND $state='confirmed' THEN 1 ELSE 0 END),0) AS rejected, ".
   "COALESCE(SUM(CASE WHEN d.decision='flag' THEN 1 ELSE 0 END),0) AS notes, ".
   "COALESCE(SUM(CASE WHEN $state IN ('pending','failed','conflict') THEN 1 ELSE 0 END),0) AS unconfirmed";
@@ -156,7 +156,7 @@ function audit_review_breakdown_table(string $title,array $rows): string {
 function audit_record_select(): string {
  return 'SELECT d.id,d.created_at,d.recording_id,d.reviewer_id,d.decision,'.
   audit_production_expr().' AS production_state,'.
-  audit_notes_expr().' AS notes,'.
+  audit_notes_expr().' AS notes,d.reason_code AS reason_code,'.
   audit_confirmed_at_expr().' AS confirmed_at,'.
   "COALESCE(s.display_name,CONCAT('Supervisor #',d.reviewer_id)) AS display_name,".
   'r.participant_id,'.audit_prompt_expr().' AS prompt_type';
@@ -175,7 +175,7 @@ function audit_export_reviews(): never {
  $stream=fopen('php://output','wb');
  fputcsv($stream,['When (Malawi)','Supervisor','Contributor ID','Prompt type','Recording ID','Decision','Production state','Reason / notes','Confirmed (Malawi)']);
  foreach($rows as $r){
-  $out=[date_ml($r['created_at']),(string)$r['display_name'],(string)($r['participant_id']??''),audit_prompt_name($r['prompt_type']??null),(string)$r['recording_id'],(string)$r['decision'],(string)($r['production_state']??'not available'),(string)($r['notes']??''),date_ml($r['confirmed_at']??null)];
+  $out=[date_ml($r['created_at']),(string)$r['display_name'],(string)($r['participant_id']??''),audit_prompt_name($r['prompt_type']??null),(string)$r['recording_id'],(string)$r['decision'],(string)($r['production_state']??'not available'),trim((string)($r['reason_code']??'').' · '.(string)($r['notes']??'')),date_ml($r['confirmed_at']??null)];
   // Prevent spreadsheet formula execution, while preserving readable reviewer notes.
   foreach($out as &$cell){$cell=(string)$cell;if(preg_match('/^[\x00-\x20]*[=+@-]/u',$cell))$cell="'".$cell;}
   unset($cell);fputcsv($stream,$out);
@@ -186,7 +186,7 @@ function audit_page(array $u): string {
  require_admin();
  $tab=audit_get('tab','reviews');
  if(!in_array($tab,['reviews','accounts','sync'],true))$tab='reviews';
- $html=page_top('Action log','Filter supervisor decisions by contributor, reviewer, prompt type and date. Only confirmed production decisions count as approved or rejected.');
+ $html=page_top('Action log','Filter supervisor decisions by contributor, reviewer, prompt type and date. Only confirmed production decisions count as accepted or rejected.');
  $html.='<div class="tab-row"><a class="btn '.($tab==='reviews'?'primary':'outline').'" href="'.h(linkto('audit',['tab'=>'reviews'])).'">Supervisor review decisions</a><a class="btn '.($tab==='accounts'?'primary':'outline').'" href="'.h(linkto('audit',['tab'=>'accounts'])).'">Account & access</a><a class="btn '.($tab==='sync'?'primary':'outline').'" href="'.h(linkto('audit',['tab'=>'sync'])).'">Sync history</a></div>';
  if($tab==='sync'){
   $html.=panel_start('Production synchronization history','Recent production metadata synchronization operations.');
@@ -220,7 +220,7 @@ function audit_page(array $u): string {
  $html.='<label>Contributor ID<input name="contributor" value="'.h($filters['contributor']).'" maxlength="80" placeholder="P0014"></label>';
  $html.='<label>Supervisor<select name="supervisor">'.select_options($options,$filters['supervisor']).'</select></label>';
  $html.='<label>Prompt type<select name="prompt">'.select_options([''=>'All prompt types','sentence'=>'Reading sentences','image'=>'Pictures','free_speech'=>'Free speech','conversation_starter'=>'Conversation starter','unclassified'=>'Unclassified'],$filters['prompt']).'</select></label>';
- $html.='<label>Decision<select name="decision">'.select_options([''=>'All decisions','approve'=>'Approve','reject'=>'Reject','flag'=>'Note / flag','escalate'=>'Historical escalation'],$filters['decision']).'</select></label>';
+ $html.='<label>Decision<select name="decision">'.select_options([''=>'All decisions','accept'=>'Accept','approve'=>'Legacy approve (history)','reject'=>'Reject','flag'=>'Note / flag','escalate'=>'Historical escalation'],$filters['decision']).'</select></label>';
  $html.='<label>Production status<select name="state">'.select_options([''=>'All statuses','confirmed'=>'Confirmed','draft'=>'Draft / note','pending'=>'Pending delivery','failed'=>'Delivery failed','conflict'=>'Conflict'],$filters['state']).'</select></label>';
  $html.='<label>From date (Malawi)<input type="date" name="from" value="'.h($filters['from']).'"></label><label>To date (Malawi)<input type="date" name="to" value="'.h($filters['to']).'"></label>';
  $filtered=array_filter($filters,static fn($value)=>$value!=='');
@@ -238,16 +238,16 @@ function audit_page(array $u): string {
   $html.=panel_start('Review history unavailable','The reporting query failed. Existing production recordings and QC decisions have not been modified.');
   return $html.'<p class="notice warning">Run the supplied terminal diagnostic and check the Hostinger PHP error log for the cause.</p></section>';
  }
- $html.='<div class="metrics four">'.box_metric('Matching reviews',number_format((int)($summary['total_reviews']??0)),'Filtered submissions').box_metric('Confirmed approved',number_format((int)($summary['approved']??0)),'Official production status').box_metric('Confirmed rejected',number_format((int)($summary['rejected']??0)),'Official production status').box_metric('Not yet confirmed',number_format((int)($summary['unconfirmed']??0)),'Pending / failed / conflict').'</div>';
+ $html.='<div class="metrics four">'.box_metric('Matching reviews',number_format((int)($summary['total_reviews']??0)),'Filtered submissions').box_metric('Confirmed accepted',number_format((int)($summary['approved']??0)),'Official production status').box_metric('Confirmed rejected',number_format((int)($summary['rejected']??0)),'Official production status').box_metric('Not yet confirmed',number_format((int)($summary['unconfirmed']??0)),'Pending / failed / conflict').'</div>';
  $total=(int)($summary['total_reviews']??0);
  $html.=panel_start('Supervisor review history',number_format($total).' matching review submissions · '.$perPage.' per page · Malawi local time');
  $html.='<div class="table-scroll"><table><thead><tr><th>When</th><th>Supervisor</th><th>Contributor ID</th><th>Prompt type</th><th>Recording</th><th>Decision</th><th>Production status</th><th>Notes</th></tr></thead><tbody>';
  foreach($rows as $r){
   $pid=(string)($r['participant_id']??'');$record=(int)$r['recording_id'];
   $participant=$pid!==''?'<a href="'.h(linkto('contributor',['id'=>$pid])).'">'.h($pid).'</a>':'Unavailable';
-  $label=match($r['decision']){'approve'=>'Approve','reject'=>'Reject','flag'=>'Note only','escalate'=>'Historical escalation',default=>ucfirst((string)$r['decision'])};
+  $label=match($r['decision']){'accept'=>'Accept','approve'=>'Legacy approve (history)','reject'=>'Reject','flag'=>'Note only','escalate'=>'Historical escalation',default=>ucfirst((string)$r['decision'])};
   $production=$r['production_state']??null;
-  $html.='<tr><td>'.h(date_ml($r['created_at'])).'</td><td>'.h($r['display_name']).'</td><td>'.$participant.'</td><td>'.h(audit_prompt_name($r['prompt_type']??null)).'</td><td><a href="'.h(linkto('voice',['id'=>$record])).'">#'.$record.'</a></td><td>'.h($label).'</td><td>'.h($production!==null?ucfirst((string)$production):'Not recorded').'</td><td>'.h($r['notes']??'').'</td></tr>';
+  $html.='<tr><td>'.h(date_ml($r['created_at'])).'</td><td>'.h($r['display_name']).'</td><td>'.$participant.'</td><td>'.h(audit_prompt_name($r['prompt_type']??null)).'</td><td><a href="'.h(linkto('voice',['id'=>$record])).'">#'.$record.'</a></td><td>'.h($label).'</td><td>'.h($production!==null?ucfirst((string)$production):'Not recorded').'</td><td>'.h(trim((string)($r['reason_code']??'').' · '.(string)($r['notes']??''))).'</td></tr>';
  }
  if(!$rows)$html.='<tr><td colspan="8" class="no-data">No review submissions match these filters.</td></tr>';
  $html.='</tbody></table></div>'.pagination($page,$total,$perPage,array_merge(['page'=>'audit','tab'=>'reviews'],$filtered)).'</section>';
@@ -287,9 +287,9 @@ function feedback_page(array $u): string {
  require_admin();
  $write=official_write_status();
  $html=page_top('Feedback delivery','Manage the production messaging connection and track feedback readiness.');
- $html.='<div class="metrics three">'.box_metric('Production QC link',$write==='ready'?'Ready':'Setup required','Direct supervisor QC save').box_metric('WhatsApp messaging','Setup required','Only with recorded participant consent').box_metric('Delivery receipts','Pending','Provider webhook connection').'</div>';
+ $html.='<div class="metrics three">'.box_metric('Human-review connection',$write==='ready'?'Ready':'Setup required','Independent final supervisor decisions').box_metric('WhatsApp messaging','Setup required','Only with recorded participant consent').box_metric('Delivery receipts','Pending','Provider webhook connection').'</div>';
  $html.=panel_start('Messaging connection','Messages can be sent only after the authorized provider has been connected.');
- $html.='<div class="checklist"><div>Production QC write-back <b>'.h($write==='ready'?'Connected':'Needs configuration').'</b></div><div>Messaging provider & approved templates <b>Not connected</b></div><div>Verified participant consent <b>Requires source validation</b></div><div>Delivery reporting <b>Pending provider webhooks</b></div></div>';
+ $html.='<div class="checklist"><div>Human-review storage <b>'.h($write==='ready'?'Connected':'Needs configuration').'</b></div><div>Messaging provider & approved templates <b>Not connected</b></div><div>Verified participant consent <b>Requires source validation</b></div><div>Delivery reporting <b>Pending provider webhooks</b></div></div>';
  $html.='<details class="help-disclosure"><summary><span class="help-circle">?</span> What is required to enable WhatsApp feedback?</summary><p>An authorized DigitalOcean messaging service must check each contributor’s opt-in, select a Meta-approved template when needed, use the existing provider credential privately, and track sent, delivered and failed statuses. The public dashboard must not store phone numbers or WhatsApp credentials. Until this service is configured, no messages are sent.</p></details></section>';
  return $html;
 }
@@ -301,10 +301,10 @@ function integration_page(array $u): string {
   if($sample){try{[$raw]=production_fetch('/v1/supervision/audio/'.(int)$sample.'/status');$status=json_decode($raw,true);$audio=!empty($status['available'])?'Verified':'Not available';}catch(Throwable){$audio='Needs attention';}}
  }
  $html=page_top('Production connection','Monitor synchronized recordings, private playback and confirmed production actions.','ADMINISTRATION · SYSTEM STATUS');
- $html.='<div class="metrics three">'.box_metric('HTTPS production connection',$connected?'Connected':'Not configured','Secure DigitalOcean gateway').box_metric('Last successful synchronization',$last?date_ml($last):'Never','Hostinger metadata refresh').box_metric('Accepted-hours calculation',setting('hours_verified','0')==='1'?'Verified':'Unavailable','500-hour accepted speech target').'</div>';
+ $html.='<div class="metrics three">'.box_metric('HTTPS production connection',$connected?'Connected':'Not configured','Secure DigitalOcean gateway').box_metric('Last successful synchronization',$last?date_ml($last):'Never','Hostinger metadata refresh').box_metric('Usable final-QC hours',setting('qc_final_available','0')==='1'?'Verified':'Awaiting owner final-QC migration','Gold/silver quality labels').'</div>';
  $html.=panel_start('Connection checks','Production recordings stay on DigitalOcean. Each action uses authenticated access.');
- $html.='<div class="checklist"><div>Online portal & accounts <b>Active</b></div><div>Recording metadata <b>'.($last?'Synchronized':'Not synchronized').'</b></div><div>Private audio playback <b>'.h($audio).'</b></div><div>Production QC write-back <b>'.h($write==='ready'?'Ready':($write==='disabled'?'Not activated':'Needs attention')).'</b></div><div>Automatic updates <b>Checks every 5 seconds while portal is open</b></div><div>Background refresh <b>Use Hostinger scheduled task</b></div></div>';
- $html.='<details class="help-disclosure"><summary><span class="help-circle">?</span> What do these statuses mean?</summary><p>Metadata sync brings authorized recording details from DigitalOcean to this online portal. Private audio is streamed on demand. Official QC requires a separate production-approved, audited endpoint; the gateway confirms each action before its status is displayed as final. Hostinger scheduled tasks handle unattended refresh.</p></details></section>';
+ $html.='<div class="checklist"><div>Online portal & accounts <b>Active</b></div><div>Recording metadata <b>'.($last?'Synchronized':'Not synchronized').'</b></div><div>Private audio playback <b>'.h($audio).'</b></div><div>Human-review storage <b>'.h($write==='ready'?'Ready':($write==='disabled'?'Not activated':'Needs attention')).'</b></div><div>Automatic updates <b>Enabled</b></div><div>Background refresh <b>Use Hostinger scheduled task</b></div></div>';
+ $html.='<details class="help-disclosure"><summary><span class="help-circle">?</span> What do these statuses mean?</summary><p>Metadata sync brings authorized recording details from DigitalOcean to this online portal. Private audio is streamed on demand. Final supervisor decisions are stored independently from the collector arrival-QC status and confirmed by DigitalOcean before being shown as final. Hostinger scheduled tasks handle unattended refresh.</p></details></section>';
  $html.=panel_start('Synchronize now','Check for the latest production metadata without modifying original recordings.');
  $html.='<form method="post" action="'.h(linkto('sync')).'">'.csrf_input().'<button type="submit" class="btn primary" '.(!$connected?'disabled':'').'>'.svg_icon('sync').' Sync now</button></form></section>';
  return $html;

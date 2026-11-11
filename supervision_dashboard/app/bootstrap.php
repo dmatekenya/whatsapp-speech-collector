@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-const APP_VERSION = '0.0.0.1';
+const APP_VERSION = '0.0.0.2';
 const APP_TARGET_HOURS = 500;
 const APP_TIMEZONE = 'Africa/Blantyre';
 ini_set('display_errors','0');

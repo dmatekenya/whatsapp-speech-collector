@@ -13,46 +13,53 @@ function post_action(string $page,array $u): never {
   $id=(int)($_POST['recording_id']??0);
   if(!allowed_record($id,$u)){http_response_code(403);exit('Recording not accessible');}
   $decision=(string)($_POST['decision']??'flag');
-  if(!in_array($decision,['flag','approve','reject'],true)){notify('error','Select a valid decision.');redirect('voice',['id'=>$id]);}
+  if(!in_array($decision,['flag','accept','reject'],true)){notify('error','Invalid review decision.');redirect('voice',['id'=>$id]);}
+  if(empty($_POST['listened'])){notify('error','Confirm that you listened to this recording.');redirect('voice',['id'=>$id]);}
   $notes=trim((string)($_POST['notes']??''));
-  if(empty($_POST['listened'])){notify('error','Confirm that you listened to and assessed this recording.');redirect('voice',['id'=>$id]);}
-  if(strlen($notes)>150 || ($decision!=='flag' && strlen($notes)<5)){
-   notify('error','Official QC decisions require a reason of 5–150 characters.');redirect('voice',['id'=>$id]);
+  $reason=(string)($_POST['reason_code']??'');
+  $reasons=['wrong_sentence','noise','not_own_voice','unclear','not_chichewa','other'];
+  if(strlen($notes)>500||($decision==='flag'&&strlen($notes)<5)){
+   notify('error','Online notes must contain 5–500 characters; optional QC comments must be at most 500.');redirect('voice',['id'=>$id]);
   }
-  if($decision!=='flag' && !production_write_configured()){
-   notify('error','Official QC updates are not enabled by the production owner. You may save an online note instead.');redirect('voice',['id'=>$id]);
+  if($decision==='reject'&&(!in_array($reason,$reasons,true)||($reason==='other'&&strlen($notes)<5))){
+   notify('error','Select a rejection reason; describe an Other reason in your note.');redirect('voice',['id'=>$id]);
   }
-  $record=query('SELECT qc_status,file_status,is_test,duplicate_of FROM recordings WHERE id=?',[$id])->fetch();
-  if(!$record || $record['file_status']!=='stored'){
-   notify('error','This recording is not available for review.');redirect('voice',['id'=>$id]);
+  if($decision!=='reject')$reason=null;
+  $record=query('SELECT qc_status,qc_tier3,file_status,is_test,duplicate_of FROM recordings WHERE id=?',[$id])->fetch();
+  if(!$record||$record['file_status']!=='stored'){
+    notify('error','Recording is not stored.');redirect('voice',['id'=>$id]);
   }
-  if($decision!=='flag' && !in_array((string)$record['qc_status'],['pending','needs_review'],true)){
-   notify('error','This recording already has a final QC outcome. Refresh the review queue.');redirect('voice',['id'=>$id]);
+  if($decision!=='flag' && official_write_status()!=='ready'){
+   notify('warning','Dunstan has disabled production QC write-back. Notes can still be saved; no official decision was sent.');redirect('voice',['id'=>$id]);
   }
-  if($decision==='approve' && ((int)$record['is_test']===1 || $record['duplicate_of']!==null)){
-   notify('error','Test and duplicate recordings cannot be approved for accepted speech hours.');redirect('voice',['id'=>$id]);
+  if($decision!=='flag' && $record['qc_tier3']===$decision){
+   notify('warning','This Tier 3 decision is already current.');redirect('voice',['id'=>$id]);
+  }
+  if($decision!=='flag' && $record['qc_tier3']!==null && empty($_POST['reversal_confirm'])){
+   notify('error','A reversal requires explicit confirmation.');redirect('voice',['id'=>$id]);
+  }
+  if($decision==='accept'&&((int)$record['is_test']===1||$record['duplicate_of']!==null)){
+   notify('error','Test and duplicate recordings cannot be accepted.');redirect('voice',['id'=>$id]);
   }
   $operation=$decision==='flag'?null:new_operation_key();
   $initial=$decision==='flag'?'draft':'pending';
-  try {
-   query('INSERT INTO review_drafts(recording_id,reviewer_id,decision,notes,listened,production_state,operation_key,expected_qc) VALUES (?,?,?,?,1,?,?,?)',
-     [$id,$u['id'],$decision,$notes,$initial,$operation,$record['qc_status']]);
-   $draftId=(int)db()->lastInsertId();
-   audit('review_created','recording',(string)$id,$decision.' · request '.$draftId);
-  }catch(Throwable $e){error_log('Review save: '.$e->getMessage());notify('error','Review could not be saved; no production action was sent.');redirect('voice',['id'=>$id]);}
+  try{
+   query('INSERT INTO review_drafts(recording_id,reviewer_id,reviewer_name_snapshot,decision,notes,listened,production_state,operation_key,expected_qc,reason_code,expected_tier3) VALUES (?,?,?,?,?,1,?,?,?,?,?)',
+     [$id,$u['id'],$u['display_name'],$decision,$notes,$initial,$operation,$record['qc_status'],$reason,$record['qc_tier3']]);
+   $draftId=(int)db()->lastInsertId();audit('review_created','recording',(string)$id,$decision.' · request '.$draftId);
+  }catch(Throwable $e){error_log('Review save: '.$e->getMessage());notify('error','Review could not be saved.');redirect('voice',['id'=>$id]);}
   if($decision==='flag'){
-    notify('success','Review note saved online. No official QC status was changed.');redirect('voice',['id'=>$id]);
+   notify('success','Online note saved. No DigitalOcean QC decision was changed.');redirect('voice',['id'=>$id]);
   }
   $state=deliver_review($draftId,$u);
   if($state==='confirmed'){
-   notify('success','Recording #'.$id.' '.($decision==='approve'?'approved':'rejected').' and saved to DigitalOcean.');
+   notify('success','Recording #'.$id.' '.($decision==='accept'?'accepted':'rejected').' and confirmed by DigitalOcean.');
    $next=next_eligible_review_id($u,$id);
    if($next!==null)redirect('voice',['id'=>$next]);
-   notify('success','No other eligible pending recordings remain in your assigned review queue.');
-   redirect('queue');
+   notify('success','No additional pending recordings in your assigned queue.');redirect('queue');
   }
-  elseif($state==='conflict')notify('error','Production QC has changed or the action is ineligible. No new decision was applied. Refresh and review the current status.');
-  else notify('warning','The decision was saved here but could not be delivered to production. Retry when the connection is restored.');
+  elseif($state==='conflict')notify('error','Tier 3 state changed. Refresh the record and review before resubmitting.');
+  else notify('warning','Review not confirmed by DigitalOcean. Retry with the same saved operation key.');
   redirect('voice',['id'=>$id]);
  case 'retry_review':
   $draftId=(int)($_POST['review_id']??0);
@@ -65,7 +72,7 @@ function post_action(string $page,array $u): never {
   }
   $state=deliver_review($draftId,$u);
   notify($state==='confirmed'?'success':($state==='conflict'?'error':'warning'),
-    $state==='confirmed'?'Production QC updated successfully.':'Delivery unsuccessful; no production QC change is recorded.');
+    $state==='confirmed'?'Supervisor decision confirmed by DigitalOcean.':'Delivery unsuccessful; no production QC change is recorded.');
   redirect('voice',['id'=>$d['recording_id']]);
  case 'mark_seen':
   [$seenScope,$seenArgs]=scope_sql($u);$highest=(int)query('SELECT COALESCE(MAX(r.id),0) FROM recordings r WHERE 1=1'.$seenScope,$seenArgs)->fetchColumn();

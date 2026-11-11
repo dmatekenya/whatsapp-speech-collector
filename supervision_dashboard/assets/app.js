@@ -182,3 +182,13 @@ if(player){
    if(!confirm('Assign selected contributors exclusively to this supervisor? Existing assignments for these contributors will be replaced.'))e.preventDefault();});
  update();
 })();
+
+// Tier 3 rejection reason is required only for rejected recordings.
+(()=>{
+ const decision=document.querySelector('[data-tier3-decision]');
+ const group=document.querySelector('[data-rejection-reason]');
+ const reason=group?.querySelector('select');
+ if(!decision||!group||!reason)return;
+ const sync=()=>{const rejected=decision.value==='reject';group.hidden=!rejected;reason.required=rejected;if(!rejected)reason.value='';};
+ decision.addEventListener('change',sync);sync();
+})();

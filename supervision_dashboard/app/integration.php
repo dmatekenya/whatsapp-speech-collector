@@ -14,54 +14,113 @@ function production_fetch(string $path,?string $range=null): array {
  return [$body,$code,$mime];
 }
 function qc_clean(string $value): string {return in_array(strtolower($value),['accepted','pending','needs_review','rejected'],true)?strtolower($value):'pending';}
+/** Dunstan contract: bounded keyset sync using recordings.updated_at; no catalogue cap.
+ * Checkpoint every page in the SAME MySQL transaction as its recording upserts.
+ * A fixed upper watermark avoids skipping concurrent source updates.
+ */
 function sync_production(): array {
- if(!sync_ready())throw new RuntimeException('Production API has not been connected. Follow the private HTTPS integration instructions.');
- [$raw]=production_fetch('/v1/supervision/snapshot');
- if(strlen($raw)>12000000)throw new RuntimeException('Production response exceeded the configured safety limit');
- $payload=json_decode($raw,true,512,JSON_THROW_ON_ERROR);
- if(!is_array($payload)||!isset($payload['recordings'],$payload['contributors'],$payload['snapshot'])||!is_array($payload['recordings'])||!is_array($payload['contributors'])||!is_array($payload['snapshot'])) throw new RuntimeException('Invalid production API response schema');
- if(count($payload['recordings'])>10000||count($payload['contributors'])>10000)throw new RuntimeException('Response exceeds the configured catalog batch size');
- $agg=$payload['snapshot'];
- $total=filter_var($agg['stored']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>0]]);
- $totalRows=filter_var($agg['total_rows']??$total,FILTER_VALIDATE_INT,['options'=>['min_range'=>0]]);
- if($total===false||$totalRows===false||$total>$totalRows||$totalRows<count($payload['recordings']))throw new RuntimeException('Snapshot recording count is inconsistent');
- $acceptedMs=$agg['accepted_ms']??null;
- if($acceptedMs!==null && (!is_int($acceptedMs)||$acceptedMs<0)) throw new RuntimeException('Accepted-duration aggregate is invalid');
- if($acceptedMs!==null && $acceptedMs>($total*36000000))throw new RuntimeException('Accepted duration fails validation');
- $now=gmdate('Y-m-d H:i:s');
- $seen=[];$rows=[];
- foreach($payload['recordings'] as $rec){
-  if(!is_array($rec))throw new RuntimeException('Invalid recording row');
-  $id=filter_var($rec['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);$pid=(string)($rec['participant_id']??'');
-  if($id===false||!preg_match('/^[A-Za-z0-9_-]{1,80}$/',$pid)||isset($seen[$id]))throw new RuntimeException('Invalid or duplicate recording identifier');$seen[$id]=1;
-  $received=(string)($rec['received_at']??'');try{$dt=new DateTimeImmutable($received,new DateTimeZone('UTC'));}catch(Throwable){throw new RuntimeException('Invalid timestamp in production catalog');}
-  $durationMs=$rec['duration_ms']??null;if($durationMs!==null && (!is_int($durationMs)||$durationMs<0||$durationMs>36000000))throw new RuntimeException('Invalid duration');
-  $file=(string)($rec['file_status']??'unknown');if(!in_array($file,['stored','missing','failed','deleted','pending','unknown'],true))$file='unknown';
-  $dup=$rec['duplicate_of']??null;if($dup!==null && (!is_int($dup)||$dup<1))throw new RuntimeException('Invalid duplicate marker');
-  $promptType=$rec['prompt_type']??null;
-  if($promptType!==null && (!is_string($promptType)||!preg_match('/^[a-z0-9_\-]{1,48}$/',$promptType)))throw new RuntimeException('Invalid prompt category in production catalog');
-  $rows[]=[$id,$pid,$durationMs,$file,qc_clean((string)($rec['qc_status']??'pending')),mbcut((string)($rec['qc_reason']??''),150),$promptType,$dt->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s'),!empty($rec['is_test'])?1:0,$dup];
+ if(!sync_ready())throw new RuntimeException('Production gateway not configured');
+ $lock=(int)db()->query("SELECT GET_LOCK('masakhane_tier3_metadata_cursor',0)")->fetchColumn();
+ if($lock!==1)throw new RuntimeException('A production synchronization is already running');
+ try {
+ $after=setting('tier3_cursor_after','1970-01-01T00:00:00Z');
+ $afterId=(int)setting('tier3_cursor_id','0');
+ $until=setting('tier3_sync_until');
+ $imported=0;$partial=false;$contributorsSeen=[];
+ $started=gmdate('Y-m-d H:i:s');
+ // Limited time per invocation; continues from stored cursor on the next cron/probe.
+ for($page=0;$page<8;$page++){
+  $url='/v1/supervision/changes?'.http_build_query(['after'=>$after,'after_id'=>$afterId,'limit'=>500]+($until?['until'=>$until]:[]),'','&',PHP_QUERY_RFC3986);
+  [$raw]=production_fetch($url);
+  if(strlen($raw)>1800000)throw new RuntimeException('Incremental page exceeds safety budget');
+  $payload=json_decode($raw,true,256,JSON_THROW_ON_ERROR);
+  if(!is_array($payload)||!is_array($payload['recordings']??null)||!is_array($payload['contributors']??null)||!is_array($payload['cursor']??null)||!isset($payload['until'])||!is_bool($payload['has_more']??null))throw new RuntimeException('Invalid production changes payload');
+  if(count($payload['recordings'])>500||count($payload['contributors'])>500)throw new RuntimeException('Incremental page too large');
+  if($until!==null && !hash_equals($until,(string)$payload['until']))throw new RuntimeException('Production synchronization watermark changed');
+  $until=(string)$payload['until'];
+  $cursor=(string)($payload['cursor']['after']??'');$cursorId=$payload['cursor']['after_id']??null;
+  if(!preg_match('/^\d{4}-\d{2}-\d{2}T/', $cursor) || !is_int($cursorId)||$cursorId<0)throw new RuntimeException('Invalid production cursor');
+  $rows=[];$seen=[];
+  foreach($payload['recordings'] as $rec){
+   if(!is_array($rec))throw new RuntimeException('Invalid production recording');
+   $id=filter_var($rec['id']??null,FILTER_VALIDATE_INT,['options'=>['min_range'=>1]]);$pid=(string)($rec['participant_id']??'');
+   if($id===false||!preg_match('/^[A-Za-z0-9_-]{1,80}$/D',$pid)||isset($seen[$id]))throw new RuntimeException('Invalid or duplicate recording ID');$seen[$id]=true;
+   $created=$rec['received_at']??null;$updated=$rec['updated_at']??null;
+   try{$received=(new DateTimeImmutable((string)$created))->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+       $updatedDb=(new DateTimeImmutable((string)$updated))->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.u');}
+   catch(Throwable){throw new RuntimeException('Invalid production timestamp');}
+   $ms=$rec['duration_ms']??null;
+   if($ms!==null&&(!is_int($ms)||$ms<0||$ms>36000000))throw new RuntimeException('Invalid recorded duration');
+   $file=(string)($rec['file_status']??'unknown');
+   if(!in_array($file,['stored','missing','failed','deleted','pending','unknown'],true))$file='unknown';
+   $dup=$rec['duplicate_of']??null;if($dup!==null&&(!is_int($dup)||$dup<1))throw new RuntimeException('Invalid duplicate ID');
+   $prompt=$rec['prompt_type']??null;
+   if($prompt!==null&&(!is_string($prompt)||!preg_match('/^[a-z0-9_-]{1,48}$/D',$prompt)))throw new RuntimeException('Invalid prompt type');
+   $t2=$rec['qc_tier2']??null;
+   if($t2!==null&&(!is_int($t2)||$t2<1||$t2>4))throw new RuntimeException('Invalid Tier 2 score');
+   $t3=$rec['qc_tier3']??null;
+   if($t3!==null&&!in_array($t3,['accept','reject'],true))throw new RuntimeException('Invalid Tier 3 decision');
+   $final=$rec['qc_final']??null;
+   if($final!==null&&!in_array($final,['bronze','silver','gold','rejected'],true))throw new RuntimeException('Invalid final QC label');
+   $human=$rec['human_decision']??null;
+   if($human!==null&&!in_array($human,['accept','reject'],true))throw new RuntimeException('Invalid human-review history');
+   $key=$rec['human_operation_key']??null;
+   if($key!==null && (!is_string($key)||!preg_match('/^[a-f0-9-]{36}$/D',$key)))throw new RuntimeException('Invalid human review key');
+   $humanAt=null;
+   if($rec['human_reviewed_at']??null){try{$humanAt=(new DateTimeImmutable($rec['human_reviewed_at']))->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s');}catch(Throwable){throw new RuntimeException('Invalid review timestamp');}}
+   $rows[]=[$id,$pid,$ms,$file,qc_clean((string)($rec['qc_status']??'')),mbcut((string)($rec['qc_reason']??''),150),$prompt,$received,!empty($rec['is_test'])?1:0,$dup,$human,$key,$humanAt,
+     $t2,$t3,mbcut((string)($rec['qc_tier3_reason']??''),80),$final,mbcut((string)($rec['band_reason']??''),200),$updatedDb];
+  }
+  $people=[];
+  foreach($payload['contributors'] as $p){
+   if(!is_array($p)||!preg_match('/^[A-Za-z0-9_-]{1,80}$/D',(string)($p['participant_id']??'')))throw new RuntimeException('Invalid contributor metadata');
+   $pid=(string)$p['participant_id'];$contributorsSeen[$pid]=1;
+   $people[$pid]=[$pid,mbcut((string)($p['status']??'unknown'),40),!empty($p['is_test'])?'test':'real',mbcut((string)($p['batch']??''),80)];
+  }
+  $pdo=db();$pdo->beginTransaction();
+  try {
+   $addPerson=$pdo->prepare('INSERT INTO contributors(participant_id,status,contributor_type,batch) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status),contributor_type=VALUES(contributor_type),batch=VALUES(batch)');
+   foreach($people as $p)$addPerson->execute($p);
+   $sql='INSERT INTO recordings(id,participant_id,duration_ms,file_status,qc_status,qc_reason,prompt_type,received_at,is_test,duplicate_of,human_decision,human_operation_key,human_reviewed_at,qc_tier2,qc_tier3,qc_tier3_reason,qc_final,band_reason,source_updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE participant_id=VALUES(participant_id),duration_ms=VALUES(duration_ms),file_status=VALUES(file_status),qc_status=VALUES(qc_status),qc_reason=VALUES(qc_reason),prompt_type=VALUES(prompt_type),received_at=VALUES(received_at),is_test=VALUES(is_test),duplicate_of=VALUES(duplicate_of),human_decision=VALUES(human_decision),human_operation_key=VALUES(human_operation_key),human_reviewed_at=VALUES(human_reviewed_at),qc_tier2=VALUES(qc_tier2),qc_tier3=VALUES(qc_tier3),qc_tier3_reason=VALUES(qc_tier3_reason),qc_final=VALUES(qc_final),band_reason=VALUES(band_reason),source_updated_at=VALUES(source_updated_at),imported_at=CURRENT_TIMESTAMP';
+   $upsert=$pdo->prepare($sql);
+   $receipt=$pdo->prepare("UPDATE review_drafts SET production_state='confirmed',production_qc=?,confirmed_at=?,production_message='Verified by the DigitalOcean append-only audit' WHERE recording_id=? AND operation_key=? AND decision=? AND production_state IN ('pending','failed','conflict')");
+   foreach($rows as $r){$upsert->execute($r);if($r[10]!==null&&$r[11]!==null)$receipt->execute([$r[10],$r[12],$r[0],$r[11],$r[10]]);}
+   set_setting('tier3_cursor_after',$cursor);set_setting('tier3_cursor_id',(string)$cursorId);
+   set_setting('tier3_sync_until',$payload['has_more']?$until:'');
+   set_setting('last_successful_sync',gmdate('Y-m-d H:i:s'));
+   $pdo->commit();
+  }catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
+  $imported+=count($rows);$after=$cursor;$afterId=$cursorId;
+  $partial=$payload['has_more'];if(!$partial)break;
  }
- $persons=[];
- foreach($payload['contributors'] as $person){ if(!is_array($person))throw new RuntimeException('Invalid contributor row');$pid=(string)($person['participant_id']??'');if(!preg_match('/^[A-Za-z0-9_-]{1,80}$/',$pid))throw new RuntimeException('Invalid contributor ID');$persons[$pid]=[$pid,mbcut((string)($person['status']??'unknown'),40),!empty($person['is_test'])?'test':'real',mbcut((string)($person['batch']??''),80)]; }
- $started=gmdate('Y-m-d H:i:s');$pdo=db();$pdo->beginTransaction();
- try{
-  $st=$pdo->prepare('INSERT INTO contributors(participant_id,status,contributor_type,batch) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status), contributor_type=VALUES(contributor_type),batch=VALUES(batch)');
-  foreach($persons as $values)$st->execute($values);
-  // Existing cached rows remain until a complete authoritative reconciliation is supported by the API.
-  $st=$pdo->prepare('INSERT INTO recordings(id,participant_id,duration_ms,file_status,qc_status,qc_reason,prompt_type,received_at,is_test,duplicate_of) VALUES (?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE participant_id=VALUES(participant_id),duration_ms=VALUES(duration_ms),file_status=VALUES(file_status),qc_status=VALUES(qc_status),qc_reason=VALUES(qc_reason),prompt_type=VALUES(prompt_type),received_at=VALUES(received_at),is_test=VALUES(is_test),duplicate_of=VALUES(duplicate_of),imported_at=CURRENT_TIMESTAMP');
-  foreach($rows as $values)$st->execute($values);
-  $safe=['stored'=>(string)$total,'accepted_ms'=>$acceptedMs===null?'unknown':(string)$acceptedMs,'hours_verified'=>$acceptedMs===null?'0':'1',
-  'prompt_metadata_available'=>!empty($agg['prompt_metadata_available'])?'1':'0',
-  'prompt_classified'=> (string)(int)($agg['classified_recordings']??0),
-  'prompt_unclassified'=> (string)(int)($agg['unclassified_recordings']??0)];
-  foreach(['pending','accepted','needs_review','rejected'] as $status){$v=$agg['qc'][$status]??null;if(!is_int($v)||$v<0||$v>$totalRows)throw new RuntimeException('Invalid QC totals');$safe['qc_'.$status]=(string)$v;}
-  if(array_sum(array_map('intval',array_intersect_key($safe,array_flip(['qc_pending','qc_accepted','qc_needs_review','qc_rejected']))))>$totalRows)throw new RuntimeException('QC totals exceed stored recordings');
-  $safe['last_successful_sync']=$now;
-  foreach($safe as $key=>$value){$st=$pdo->prepare('INSERT INTO app_settings(setting_key,setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)');$st->execute([$key,$value]);}
-  $st=$pdo->prepare("INSERT INTO sync_runs(status,description,started_at) VALUES ('ok',?,?)");$st->execute(['Synchronized '.count($rows).' recording rows, '.$total.' stored in production',$started]);
-  $pdo->commit();return ['stored'=>$total,'rows'=>count($rows),'contributors'=>count($persons),'accepted_ms'=>$acceptedMs];
- } catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();throw $e;}
+ // Aggregate is calculated by DigitalOcean, not by summing sparse incremental pages.
+ try {
+  [$raw]=production_fetch('/v1/supervision/summary');
+  if(strlen($raw)>8192)throw new RuntimeException('Quality summary too large');
+  $sum=json_decode($raw,true,32,JSON_THROW_ON_ERROR);
+  foreach(['stored','total_rows','collected_ms','qc_final_available','final_counts'] as $k)if(!array_key_exists($k,$sum))throw new RuntimeException('Invalid quality summary');
+  if(!is_bool($sum['qc_final_available'])||!is_int($sum['collected_ms'])||$sum['collected_ms']<0||!is_int($sum['stored'])||$sum['stored']<0)throw new RuntimeException('Invalid quality aggregates');
+  $settings=['stored'=>(string)$sum['stored'],'collected_ms'=>(string)$sum['collected_ms'],
+    'qc_final_available'=>$sum['qc_final_available']?'1':'0',
+    'usable_ms'=>$sum['qc_final_available']?(string)$sum['usable_ms']:'unknown',
+    'bronze_ms'=>$sum['qc_final_available']?(string)$sum['bronze_ms']:'unknown',
+    'rejected_final_ms'=>$sum['qc_final_available']?(string)$sum['rejected_ms']:'unknown',
+    'hours_verified'=>$sum['qc_final_available']?'1':'0',
+    'accepted_ms'=>$sum['qc_final_available']?(string)$sum['usable_ms']:'unknown'];
+  // QC grants can arrive AFTER the pilot's initial read-only sync. Once
+  // final QC becomes readable, replay the catalog so older clips gain labels.
+  $becameAvailable=($sum['qc_final_available'] && setting('qc_final_available','0')!=='1');
+  foreach($settings as $k=>$v)set_setting($k,$v);
+  if($becameAvailable){
+    set_setting('tier3_cursor_after','1970-01-01T00:00:00Z');
+    set_setting('tier3_cursor_id','0');
+    set_setting('tier3_sync_until','');
+  }
+ }catch(Throwable $e){error_log('DigitalOcean quality summary unavailable: '.$e->getMessage());}
+ query('INSERT INTO sync_runs(status,description,started_at) VALUES (\'ok\',?,?)',[(string)('Imported '.$imported.' changed recordings'.($partial?' (more pending)':'')),$started]);
+ return ['stored'=>(int)setting('stored','0'),'rows'=>$imported,'contributors'=>count($contributorsSeen),
+    'accepted_ms'=>setting('usable_ms'),'more'=>$partial];
+ }finally{db()->query("SELECT RELEASE_LOCK('masakhane_tier3_metadata_cursor')");}
 }
 function sync_failed(string $detail): void {try{query("INSERT INTO sync_runs(status,description,started_at) VALUES ('failed',?,UTC_TIMESTAMP())",[mbcut($detail,490)]);}catch(Throwable $ignored){} }
 /** Backend-coordinated 5-second change checks while authenticated pages are open. */
@@ -91,7 +150,7 @@ function live_refresh(array $u): array {
    $hash=hash('sha256',json_encode($rev,JSON_THROW_ON_ERROR));
    $previous=setting('live_revision_hash');
    $lastFull=sync_timestamp();
-   $needsSync=$previous===null||!hash_equals($previous,$hash)||!$lastFull||strtotime($lastFull)<time()-300;
+   $needsSync=$previous===null||!hash_equals($previous,$hash)||!$lastFull||strtotime($lastFull)<time()-300||((string)setting('tier3_sync_until','')!=='');
    if($needsSync){
       sync_production();
       set_setting('live_revision_hash',$hash);

@@ -1,0 +1,8 @@
+{
+  "name": "Masakhane Speech Quality Hostinger",
+  "version": "0.0.0.1",
+  "files": 29,
+  "profile_feature": true,
+  "retains_existing_mysql": true,
+  "unconfigured_production_gateway": true
+}

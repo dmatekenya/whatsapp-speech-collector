@@ -108,3 +108,4 @@ data/*
 
 # Database backups (contain personal data)
 backups/
+.Rproj.user

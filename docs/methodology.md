@@ -9,6 +9,46 @@ Related project docs: `claude/todo.md` (tasks), `claude/architecture-database.md
 `claude/meta-cloud-api-migration-plan.md` (WhatsApp provider move). Prompt rules for annotators
 live in the separate prompt creation guide.
 
+## Contents
+
+- [Overview](#overview)
+- [1. Purpose and scope](#1-purpose-and-scope)
+- [2. Participants](#2-participants)
+- [3. Collection channel](#3-collection-channel)
+- [4. Task types and prompts](#4-task-types-and-prompts)
+- [5. Session design](#5-session-design)
+- [6. Targets and collection runs](#6-targets-and-collection-runs)
+- [7. Audio handling](#7-audio-handling)
+- [8. Quality control](#8-quality-control)
+  - [8.1 Overview of the QC protocol](#81-overview-of-the-qc-protocol)
+  - [8.2 Tier 1: arrival checks](#82-tier-1-arrival-checks)
+  - [8.3 Tier 2: ASR batch checks](#83-tier-2-asr-batch-checks)
+  - [8.4 Tier 3: human review](#84-tier-3-human-review)
+  - [8.5 Final label](#85-final-label)
+  - [8.6 Planned checks](#86-planned-checks)
+- [9. Privacy and data protection](#9-privacy-and-data-protection)
+- [10. Decision log](#10-decision-log)
+
+## Overview
+
+- **What:** an open Chichewa speech dataset (~500 hours) for speech recognition, about 30% read
+  sentences and 70% spontaneous speech, recorded by adult volunteers on their own phones.
+- **How:** contributors are registered offline with consent, then record voice notes in WhatsApp
+  with a bot ("Tiyankhuleni"). The bot sends tasks (read a sentence, describe a picture, answer a
+  question, or talk freely), checks each voice note on arrival and tracks progress toward each
+  contributor's target in minutes.
+- **Where:** the bot, database and audio run on one server (DigitalOcean droplet) and use the Meta
+  WhatsApp Cloud API. A fine-tuned Chichewa Whisper model on a rented GPU (Modal) transcribes
+  recordings twice a day. Supervisors review clips in a web dashboard.
+- **Quality:** every clip passes through up to three tiers of checks (instant checks on arrival,
+  automatic checks after transcription, human review) that combine into one label per clip:
+  Bronze (not yet validated), Silver (validated automatically), Gold (validated by a human) or
+  Rejected (section 8).
+- **Privacy:** recordings are linked only to a pseudonymous participant ID; names and phone numbers
+  stay in a restricted registry (section 9).
+- **Status:** pilot from 2026-11-09 (16 contributors × 20 minutes); main collection in weekly runs
+  afterwards.
+
 ## 1. Purpose and scope
 
 - Goal: an open Chichewa speech dataset of about 500 hours for ASR (and a TTS-ready subset from the
@@ -213,10 +253,30 @@ Recordings are classified at two levels:
 
 ## 8. Quality control
 
-- **Three tiers of checks.** Tier 1: arrival checks (below), recorded in `recordings.qc_status`
-  and `qc_reason`; this column is tier 1 and is not changed by later tiers. Tier 2: the daily ASR
-  batch (step 2 below), recorded in `recordings.qc_tier2` and `qc_results`. Tier 3: human review
-  by supervisors (dashboard; planned). A final label combining the three is planned.
+### 8.1 Overview of the QC protocol
+
+Each clip passes through up to three tiers of checks. Each tier records its own result in its own
+column, and a fourth column combines them into one final label. No tier changes another tier's
+column.
+
+| Tier | When | Who | Recorded in | Values |
+|---|---|---|---|---|
+| 1. Arrival checks | on arrival | the bot | `recordings.qc_status`, `qc_reason` | `pending`, `accepted`, `needs_review`, `rejected` |
+| 2. ASR batch checks | after each transcription batch (twice a day in the pilot) | scoring on the server | `qc_results` (history), `recordings.qc_tier2` | 1 (probably unusable) to 4 (all signals good); empty = not scored |
+| 3. Human review | flagged clips and random spot checks | supervisors, in the dashboard | `qc_human_reviews` (history), `recordings.qc_tier3`, `qc_tier3_reason` | `accept`, `reject`; empty = no human decision |
+| Final label | whenever a tier changes | database triggers | `recordings.qc_final` | `bronze`, `silver`, `gold`, `rejected` |
+
+- **Only tier 1 and humans reject.** Tier 2 never rejects a clip on its own; low levels send it to
+  a supervisor.
+- **Tier 1 is never overwritten.** `qc_status` drives the bot's retakes and progress counts, so
+  later tiers write only their own columns.
+- **Rules live in one place:** the final label is set by database triggers from the tier columns
+  (section 8.5), not by the bot or the dashboard.
+- **Labels follow the data-lake convention of increasing trust:** Bronze → Silver → Gold. Here Gold
+  means checked by a human, not aggregated as in a data warehouse.
+
+### 8.2 Tier 1: arrival checks
+
 - **On arrival (worker and conversation engine):** the worker measures duration and speech levels
   on the WAV and applies the default audio-origin rule and long flag; once the clip is matched to
   a prompt, the engine applies the task type's rules: audio origin, empty audio, duplicates,
@@ -249,10 +309,8 @@ Recordings are classified at two levels:
   duration, % too short or too long, retake rate, forwarded attempts). Participants who
   consistently rush, cut off or run long are followed up by a supervisor; automatic nudges from the
   bot may come later.
-- **Planned daily batch job (CPU):** run over each day's recordings: speech/noise detection with a
-  stronger voice activity model (e.g. Silero VAD) to catch loud non-speech clips; speaker
-  consistency checks (uploaded and forwarded clips first); and the duration report. Results feed supervisor
-  follow-up and the `needs_review` queue.
+### 8.3 Tier 2: ASR batch checks
+
 - **Batch ASR (GPU, twice a day in the pilot):** two steps.
   - **Step 1, transcription (in place):** recordings are sent to the fine-tuned Chichewa Whisper
     model (`whisper_b`, `dmatekenya/whisper-large-v3-chichewa-variant-b-normalized-transcript`;
@@ -349,7 +407,8 @@ Recordings are classified at two levels:
       review. `band_reason` lists the metric(s) at that lowest level, e.g. `cer:2` or
       `compression_ratio:1,word_count:1`, so a reviewer knows what to listen for. A metric that
       doesn't apply or is missing (CER outside sentences, `avg_logprob` for long-form clips) is
-      skipped. Tier 2 never rejects: even level 1 waits for a human.
+      skipped. Tier 2 never rejects: even level 1 waits for a human. CER and WER use `jiwer`
+      (the version used in the model comparison) and the training normaliser.
 
       **Cut-offs (provisional, `thresholds_version` 2026-11-10-provisional; to be calibrated on
       pilot data by listening to a sample per level and task type):**
@@ -372,10 +431,86 @@ Recordings are classified at two levels:
       compression ratio (2.4) and log-probability (−1.0); clean-audio SNR from 20 dB as used for
       NaijaVoices; the arrival check's 20% for the speech ratio. Cut-offs live in a config file
       with the version, so a change is a re-score, not a code change.
-- **Planned speaker check:** compare uploaded and forwarded clips (and later all clips) with a voice profile
+    - **On demand:** `scripts/score_tier2.py` scores clips not yet scored, re-scores after a cut-off
+      change (`--rescore`), prints the report from stored results (`--report-only`) and writes a
+      listening sample per task type and level (`--sample N`) for calibration (`docs/deploy.md`).
+
+### 8.4 Tier 3: human review
+
+- **Dashboard.** Supervisors log in to a web dashboard (PHP/MySQL, hosted on Hostinger) that shows
+  their assigned contributors' recordings and plays the audio. It reads from the server through a
+  token-protected gateway (`/v1/supervision/*`), using a read-only database account and the audio
+  folder mounted read-only. Only participant IDs, status and batch leave the server, never names or
+  phone numbers; audio is passed through on playback and not stored on Hostinger. Live for viewing
+  and testing during the pilot.
+- **What supervisors review:**
+  - clips flagged by tier 1 (`needs_review`, e.g. `low_speech`, `speaker_check_pending`);
+  - clips at tier-2 levels 1 and 2, lowest first;
+  - a random spot-check sample of Silver clips, at a configured rate with a daily cap.
+- **Decisions:** `accept` or `reject`. A rejection needs a reason from a fixed list:
+  `wrong_sentence`, `noise`, `not_own_voice`, `unclear`, `not_chichewa`, `other` (with a note).
+  Escalations and follow-ups with contributors are kept in the dashboard; they are not QC decisions.
+- **Where decisions are recorded:** `qc_human_reviews`, one row per decision (recording, decision,
+  reason, note, reviewer, time, a unique operation key so a retried request is never saved twice,
+  and when the contributor was told). Rows are only added, never changed; a reversal is a new row,
+  and the latest row is the current verdict. A trigger copies it to `recordings.qc_tier3` and
+  `qc_tier3_reason`. The dashboard's database account may only add rows to this table; it has no
+  rights on `recordings`.
+- **Status (2026-11-10):** the dashboard's first version wrote decisions directly into
+  `qc_status`; this was switched off before any decision was written. `qc_human_reviews` and its
+  triggers come with the next migration; until then decisions are not recorded on the server.
+- **Contributors are told about rejections:** a daily digest per contributor (which clips, why,
+  minutes left), within WhatsApp's 24-hour window or as an approved template (planned). A clip
+  rejected by a supervisor stops counting toward the contributor's minutes only once they have been
+  told (`notified_at`), so minutes never drop without explanation. Rejected clips are not
+  re-recorded; spare prompts cover the shortfall.
+
+### 8.5 Final label
+
+`recordings.qc_final`, set by a database trigger whenever a tier column changes. Every clip has
+exactly one label.
+
+| Label | Meaning | Use in the dataset |
+|---|---|---|
+| **Bronze** | Stored and passed tier 1, not yet validated: waiting for scoring, or waiting for a supervisor | Not released until validated |
+| **Silver** | Validated automatically (tier-2 level 3 or 4), not reviewed by a human | Training data |
+| **Gold** | Validated by a human (`qc_tier3 = accept`) | Training data; the only source for dev and test sets |
+| **Rejected** | Not usable, with the reason and the tier that decided | Not released; kept |
+
+Rules, applied in order (the first that matches decides):
+
+1. A human decision wins (the latest one): `accept` → Gold, `reject` → Rejected.
+2. Tier 1 rejected (`qc_status = rejected`) → Rejected.
+3. Tier 1 flagged (`qc_status = needs_review`) → Bronze until a supervisor decides (proposed; e.g.
+   forwarded clips waiting for a speaker check).
+4. Tier-2 level 3 or 4 → Silver.
+5. Otherwise Bronze: tier-2 level 1 or 2 (waiting for review) or not yet scored.
+
+Clips only move up by automatic checks; only a human moves a clip to Gold or rejects a Silver or
+Gold clip.
+
+- **Measuring Silver quality:** the share of spot-checked Silver clips that supervisors reject
+  estimates how trustworthy Silver is (reported per round and per contributor, and in the dataset
+  card), and shows whether tier-2 cut-offs need tightening.
+- **Two minute counts:** *collected minutes* (contributor progress, the bot's rule: everything not
+  rejected by tier 1, minus notified human rejections) and *usable minutes* (Gold + Silver).
+- **Precedents:** the three outcomes mirror Common Voice's validated / invalidated / other; ASR-based
+  automatic acceptance follows LibriSpeech (clean/other by ASR error) and GigaSpeech (WER caps for
+  training subsets); human-checked dev/test sets follow GigaSpeech; random per-reviewer re-checks
+  follow NaijaVoices. Unlike Common Voice's two crowd votes, one trained supervisor decides, as in
+  NaijaVoices and WAXAL.
+
+### 8.6 Planned checks
+
+- **Daily batch job (CPU):** speech/noise detection with a stronger voice activity model (e.g.
+  Silero VAD) to catch loud non-speech clips; speaker-consistency checks (uploaded and forwarded
+  clips first); the duration report. Results feed supervisor follow-up and the review queue.
+- **Speaker check:** compare uploaded and forwarded clips (and later all clips) with a voice profile
   built from the participant's own recorded voice notes (speaker embeddings); also near-duplicate
-  checks. Human review by supervisors.
-- QC thresholds to be calibrated on pilot data.
+  checks.
+- **SNR cross-check:** compare our WADA-SNR values with an established implementation on 10–20 real
+  clips (our lookup table was regenerated from the paper's model).
+- All QC thresholds are calibrated on pilot data.
 
 ## 9. Privacy and data protection
 
@@ -384,6 +519,10 @@ Recordings are classified at two levels:
 - Phone numbers and names are restricted; logs never show full phone numbers, message text, media
   URLs or WhatsApp message IDs.
 - Secrets live only in environment files on the server; never committed.
+- **Processors outside the server:** Modal (GPU transcription: audio passed in each call, not kept;
+  only model weights are cached) and Hostinger (supervision dashboard: participant IDs, recording
+  metadata and supervisor decisions; audio passed through on playback, not stored). Both to be
+  listed in the privacy notice.
 - Open: dataset licence (suggested CC BY 4.0, subject to grant terms), retention period for
   contact details, final hosting region.
 
@@ -426,5 +565,7 @@ Recordings are classified at two levels:
 | 2026-11-07 | Long, mostly silent clips: over 30 s with under 20% active audio rejected as `no_speech` (retake), so they can't count in full |
 | 2026-11-09 | Registration welcome: a utility template (`registration_welcome`, first name and total target in minutes) sent once to each new participant after import, since they haven't written to the bot yet; the only paid message type (under about US$0.01 each); exempt from the 24-hour check, which still applies to all other messages |
 | 2026-11-10 | ASR step 2 metrics agreed: audio (duration, speech ratio, mean level, SNR), transcript (word count, words per second, average log-probability, compression ratio), sentences (CER main, WER, length ratio, digits flag; prompts with numbers capped at review). Audio facts stay on `recordings` (new `snr_db`); transcript-based metrics go into a new `qc_results` table (one column per metric), one row per scoring run; the band is mirrored to a new `recordings.qc_tier2`. `qc_status` is tier 1 and is not changed by later tiers. Clipping not measured. The batch never rejects on its own |
+| 2026-11-10 | QC protocol: three tiers plus a final label. Tier 1 `qc_status` (never overwritten), tier 2 `qc_tier2` 1–4, tier 3 `qc_tier3` accept/reject with a reason list (decisions in an append-only `qc_human_reviews`, copied by trigger), final `qc_final` Bronze/Silver/Gold/Rejected by trigger with a fixed precedence (human, tier-1 rejection, tier-1 flag, tier 2). Gold = human-validated; dev/test sets from Gold only; Silver quality measured by spot checks. Based on Common Voice, LibriSpeech, GigaSpeech, NaijaVoices |
+| 2026-11-10 | Supervision dashboard (Hostinger, read-only gateway on the server) live for viewing; its direct write-back to `qc_status` switched off before use; decisions to be recorded in `qc_human_reviews`. A supervisor-rejected clip stops counting once the contributor is notified |
 | 2026-11-10 | Tier-2 levels 1–4 (4 good, 3 borderline, 2 review, 1 probably unusable), combined by weakest link across metrics with the limiting metric(s) recorded; provisional cut-offs in config, calibrated on pilot data |
 | 2026-11-08 | Bot instructions shortened, since contributors get a full guide: three general tips (quiet place and pauses, swipe-reply to redo, PROGRESS) and one or two lines per task type with its length limit; no change to behaviour |

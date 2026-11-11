@@ -275,7 +275,7 @@ def test_meta_voice_note_is_stored_and_flagged(client: TestClient, channels: Cha
     (recording,) = recordings()
     assert recording.status == "stored" and recording.original_path.endswith(".ogg")
     assert recording.is_voice_note is True and recording.forwarded == "no"
-    assert recording.audio_origin == "recorded" and recording.qc_status == "pending"
+    assert recording.audio_origin == "recorded" and recording.qc_status == "accepted"
     assert recording.provider_media_deleted is False
     assert channels.meta.downloads == 1 and channels.meta.deletes == 0
     assert channels.twilio.downloads == 0 and channels.twilio.sent == []
@@ -306,7 +306,7 @@ def test_twilio_recordings_leave_the_meta_flags_empty(client: TestClient, channe
     (recording,) = recordings()
     assert recording.status == "stored"
     assert recording.is_voice_note is None and recording.forwarded is None
-    assert recording.audio_origin == "unknown" and recording.qc_status == "pending"
+    assert recording.audio_origin == "unknown" and recording.qc_status == "accepted"
 
 
 def test_forwarded_meta_voice_note_while_a_sentence_is_open(client: TestClient, channels: Channels) -> None:

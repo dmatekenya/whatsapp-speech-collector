@@ -11,6 +11,7 @@ import yaml
 from src.qc import metrics as m
 from src.qc.levels import (
     ALL_OK,
+    NOT_APPLICABLE,
     QcConfigError,
     clip_level,
     load_qc_config,
@@ -18,6 +19,20 @@ from src.qc.levels import (
 )
 
 CONFIG = load_qc_config()
+
+
+def _all_metrics_on():
+    """The real cut-offs with every metric setting a level, for every task type: tests the
+    weakest-link machinery that a metric switched back on (sets_level: true) would use."""
+    config = CONFIG.model_copy(deep=True)
+    for rules in config.levels.values():
+        rules.sets_level = True
+    config.word_count.sets_level = True
+    config.levelled_task_types = ["sentence", "image", "conversation_starter", "free_speech"]
+    return config
+
+
+ALL_ON = _all_metrics_on()
 SR = 16000
 
 
@@ -154,7 +169,32 @@ def test_read_wav(tmp_path: Path) -> None:
     ],
 )  # fmt: skip
 def test_each_cut_off(metric: str, value: float, level: int) -> None:
-    assert metric_levels({metric: value}, "sentence", CONFIG) == {metric: level}
+    # The bands are kept for report-only metrics too, so they can be switched back on.
+    assert CONFIG.levels[metric].level(value) == level
+    assert metric_levels({metric: value}, "sentence", ALL_ON) == {metric: level}
+
+
+@pytest.mark.parametrize(
+    ("metric", "value"),
+    [("compression_ratio", 3.0), ("words_per_second", 0.1), ("avg_logprob", -2.0), ("snr_db", 0.0),
+     ("speech_ratio", 0.05), ("mean_dbfs", -60.0), ("word_count", 0)],
+)  # fmt: skip
+def test_only_cer_sets_a_level_since_2026_11_11(metric: str, value: float) -> None:
+    assert metric_levels({metric: value}, "sentence", CONFIG) == {}
+    assert clip_level({metric: value, "cer": 0.05}, "sentence", CONFIG) == (4, ALL_OK)
+
+
+@pytest.mark.parametrize(
+    ("cer", "level"), [(0.0, 4), (0.10, 4), (0.1001, 3), (0.15, 3), (0.1501, 2), (0.40, 2), (0.4001, 1), (1.3, 1)]
+)
+def test_sentence_levels_come_from_cer(cer: float, level: int) -> None:
+    assert clip_level({"cer": cer, "snr_db": 0.0, "word_count": 9}, "sentence", CONFIG)[0] == level
+
+
+@pytest.mark.parametrize("task_type", ["image", "conversation_starter", "free_speech"])
+def test_spontaneous_types_get_no_level(task_type: str) -> None:
+    metrics = {"cer": 0.9, "word_count": 0, "compression_ratio": 5.0, "snr_db": 0.0}
+    assert clip_level(metrics, task_type, CONFIG) == (None, NOT_APPLICABLE)
 
 
 @pytest.mark.parametrize(
@@ -171,20 +211,20 @@ def test_each_cut_off(metric: str, value: float, level: int) -> None:
     ],
 )
 def test_word_count_rules(task_type: str, words: int, expected: dict) -> None:
-    assert metric_levels({"word_count": words}, task_type, CONFIG) == expected
+    assert metric_levels({"word_count": words}, task_type, ALL_ON) == expected
 
 
 def test_weakest_link_and_reasons() -> None:
     good = {"cer": 0.05, "compression_ratio": 1.5, "words_per_second": 2.0, "avg_logprob": -0.3,
             "snr_db": 25.0, "speech_ratio": 0.6, "mean_dbfs": -25.0, "word_count": 10, "has_digits": False}  # fmt: skip
-    assert clip_level(good, "sentence", CONFIG) == (4, ALL_OK)
-    assert clip_level({**good, "snr_db": 15.0}, "sentence", CONFIG) == (3, "snr_db:3")
-    assert clip_level({**good, "snr_db": 15.0, "cer": 0.3}, "sentence", CONFIG) == (2, "cer:2")
+    assert clip_level(good, "sentence", ALL_ON) == (4, ALL_OK)
+    assert clip_level({**good, "snr_db": 15.0}, "sentence", ALL_ON) == (3, "snr_db:3")
+    assert clip_level({**good, "snr_db": 15.0, "cer": 0.3}, "sentence", ALL_ON) == (2, "cer:2")
     # Ties: every metric at the lowest level, sorted by name.
-    assert clip_level({**good, "compression_ratio": 3.0, "word_count": 0}, "image", CONFIG) == (
+    assert clip_level({**good, "compression_ratio": 3.0, "word_count": 0}, "image", ALL_ON) == (
         1, "compression_ratio:1,word_count:1",
     )  # fmt: skip
-    assert clip_level({**good, "speech_ratio": 0.1, "mean_dbfs": -45.0}, "image", CONFIG) == (
+    assert clip_level({**good, "speech_ratio": 0.1, "mean_dbfs": -45.0}, "image", ALL_ON) == (
         2, "mean_dbfs:2,speech_ratio:2",
     )  # fmt: skip
 
@@ -194,22 +234,26 @@ def test_digits_cap_sentences_at_2() -> None:
     assert clip_level(clean, "sentence", CONFIG) == (2, "has_digits:2")
     assert clip_level({**clean, "cer": 0.3}, "sentence", CONFIG) == (2, "cer:2,has_digits:2")
     assert clip_level({**clean, "cer": 0.9}, "sentence", CONFIG) == (1, "cer:1")
-    assert clip_level({"word_count": 8, "has_digits": False}, "sentence", CONFIG) == (4, ALL_OK)
+    assert clip_level({"cer": 0.0, "word_count": 8, "has_digits": False}, "sentence", CONFIG) == (4, ALL_OK)
 
 
 def test_skipped_metrics() -> None:
     # CER outside sentences; a missing avg_logprob (long-form clip); wer and length_ratio never level.
     metrics = {"cer": 0.9, "avg_logprob": None, "wer": 5.0, "length_ratio": 0.1, "word_count": 20}
-    assert metric_levels(metrics, "image", CONFIG) == {}
-    assert clip_level(metrics, "free_speech", CONFIG) == (4, ALL_OK)
-    assert clip_level({}, "sentence", CONFIG) == (4, ALL_OK)
+    assert metric_levels(metrics, "image", ALL_ON) == {}
+    assert clip_level({**metrics, "snr_db": 30.0}, "free_speech", ALL_ON) == (4, ALL_OK)
+    # A sentence with no level-setting metric (no prompt text, so no CER): no level either.
+    assert clip_level({"wer": 0.5, "snr_db": 30.0}, "sentence", CONFIG) == (None, NOT_APPLICABLE)
 
 
 # ======
 # CONFIG
 # ======
 def test_the_config_matches_the_methodology_versions() -> None:
-    assert (CONFIG.metrics_version, CONFIG.thresholds_version, CONFIG.model) == ("1", "2026-11-10-provisional", "whisper_b")
+    assert (CONFIG.metrics_version, CONFIG.thresholds_version, CONFIG.model) == ("1", "2026-11-11-cer-only", "whisper_b")
+    assert CONFIG.levelled_task_types == ["sentence"]
+    assert [name for name, rules in CONFIG.levels.items() if rules.sets_level] == ["cer"]
+    assert CONFIG.has_digits.sets_level and not CONFIG.word_count.sets_level
 
 
 @pytest.mark.parametrize(
@@ -220,6 +264,7 @@ def test_the_config_matches_the_methodology_versions() -> None:
         (lambda c: c["levels"]["cer"]["bands"][0].update(level=5), "less than or equal to 4"),
         (lambda c: c["levels"].update(clipping={"bands": [{"level": 4, "max": 1}], "otherwise": 1}), "unknown metric"),
         (lambda c: c["word_count"].update(short_applies_to=["pictures"]), "not in task_types"),
+        (lambda c: c.update(levelled_task_types=["sentences"]), "not in task_types"),
         (lambda c: c.update(metrics_version="2"), "metrics_version"),
         (lambda c: c["levels"]["snr_db"]["bands"][0].update(min=30, max=20), "above max"),
     ],

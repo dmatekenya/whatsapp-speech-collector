@@ -207,7 +207,7 @@ def test_speech_is_accepted(client: TestClient, channels: Channels, tmp_path: Pa
     assert reply.startswith("✅ Received. Sentence 2 of 3:")
     (recording,) = recordings()
     assert recording.active_seconds > 3 and recording.mean_dbfs > -30
-    assert (recording.qc_status, recording.qc_reason) == ("pending", None)
+    assert (recording.qc_status, recording.qc_reason) == ("accepted", None)
     assert assignments()[0].status == "recorded"
 
 
@@ -240,7 +240,7 @@ def test_thresholds_come_from_the_config(
     # At -70 dBFS the faint noise counts as sound: accepted.
     assert reply.startswith("✅ Received.")
     (recording,) = recordings()
-    assert recording.active_seconds > 5 and recording.qc_status == "pending"
+    assert recording.active_seconds > 5 and recording.qc_status == "accepted"
 
 
 def test_engine_thresholds_come_from_the_config(

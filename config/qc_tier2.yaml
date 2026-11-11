@@ -9,11 +9,19 @@
 # spot-checked more often); 2 a clear concern (review queue); 1 probably unusable (top of the
 # review queue). Tier 2 never rejects anything and never changes qc_status (tier 1).
 #
-# Weakest link: each metric gets its own level from its cut-offs, and the clip's level is the
-# lowest of them (4 if none is lower). A metric that doesn't apply to the task type or is
-# missing (CER outside sentences, avg_logprob for long-form clips) is skipped. qc_results
-# .band_reason lists the metric(s) at the lowest level, e.g. "cer:2"; "all_ok" for level 4.
-# wer and length_ratio are stored and reported but set no level.
+# Since 2026-11-11 only CER sets a level, and only sentences get one: on the full pilot
+# (929 clips) CER was the only metric that separated clips reliably (SNR saturates on WhatsApp
+# audio, compression ratio flags long normal answers, log-probability and level never trigger).
+# Every metric is still computed and stored in qc_results for every clip, for calibration
+# against supervisors' decisions; switch one back on with sets_level: true (no code change).
+#
+# Clips of a task type not in levelled_task_types get no level: qc_results.band empty,
+# band_reason "not_applicable", recordings.qc_tier2 empty. For the others, weakest link: each
+# level-setting metric gets a level from its cut-offs and the clip's level is the lowest (4 if
+# none is lower); band_reason lists the metric(s) at that level, e.g. "cer:2"; "all_ok" for 4.
+# A metric that doesn't apply or is missing is skipped; a levelled clip with no level-setting
+# metric at all (a sentence without prompt text) gets no level either. wer and length_ratio
+# are stored and reported but never set a level.
 #
 # Changing a cut-off: edit this file (on the droplet it is mounted into the containers, so no
 # rebuild is needed), set a new thresholds_version, then re-score:
@@ -25,17 +33,21 @@
 # config/assignment_settings.yaml.
 
 metrics_version: "1"                         # how the metrics are computed (src/qc/metrics.py)
-thresholds_version: "2026-11-10-provisional" # these cut-offs; bump it when changing any
+thresholds_version: "2026-11-11-cer-only"     # these cut-offs; bump it when changing any
 model: whisper_b                             # the ASR model whose latest transcript is scored
+levelled_task_types: [sentence]              # the others: no level (not_applicable)
 
 # =============
 # METRIC LEVELS
 # =============
 # For each metric: bands checked from the top; the first that contains the value gives the
 # level (min and max are inclusive; a missing one is open). A value in no band gets
-# "otherwise". applies_to: only these task types (all if left out).
+# "otherwise". applies_to: only these task types (all if left out). sets_level: false keeps
+# the metric (computed, stored, reported) without letting it set a level; the bands are kept
+# so it can be switched back on.
 levels:
   cer:                                       # sentences: transcript vs the prompt text sent
+    sets_level: true
     applies_to: [sentence]
     bands:
       - {level: 4, max: 0.10}
@@ -43,31 +55,37 @@ levels:
       - {level: 2, max: 0.40}
     otherwise: 1                             # > 0.40: probably the wrong sentence
   compression_ratio:                         # repeated phrases (model hallucination)
+    sets_level: false
     bands:
       - {level: 4, max: 2.0}
       - {level: 3, max: 2.4}                 # Whisper's own default limit
     otherwise: 1
   words_per_second:                          # words / active_seconds
+    sets_level: false
     bands:
       - {level: 4, min: 0.8, max: 3.5}
       - {level: 3, min: 0.5, max: 4.5}
     otherwise: 2                             # under 0.5 (hesitant, silent) or over 4.5 (invented text)
   avg_logprob:                               # model confidence; missing for long-form clips
+    sets_level: false
     bands:
       - {level: 4, min: -0.5}
       - {level: 3, min: -1.0}                # Whisper's own default (-1.0)
     otherwise: 2
   snr_db:                                    # WADA-SNR; WhatsApp's noise suppression flatters it
+    sets_level: false
     bands:
       - {level: 4, min: 20}
       - {level: 3, min: 10}
     otherwise: 2
   speech_ratio:                              # active_seconds / duration_s
+    sets_level: false
     bands:
       - {level: 4, min: 0.4}
       - {level: 3, min: 0.2}                 # the arrival check's 20%
     otherwise: 2
   mean_dbfs:                                 # overall level, including pauses
+    sets_level: false
     bands:
       - {level: 4, min: -35}
       - {level: 3, min: -40}
@@ -77,6 +95,7 @@ levels:
 # WORD COUNT
 # ==========
 word_count:
+  sets_level: false                          # report only (sentences: an empty reading has CER 1.0 anyway)
   empty_level: 1                             # 0 words, all task types
   short_under: 5                             # fewer words than this ...
   short_level: 2                             # ... gives this level, for these task types only:
@@ -88,5 +107,6 @@ word_count:
 # A sentence whose prompt contains a digit goes no further than this level: whisper_b writes
 # numbers as words, so its CER is unreliable.
 has_digits:
+  sets_level: true
   applies_to: [sentence]
   max_level: 2

@@ -7,6 +7,10 @@ decide, write the new state and the reply's outbound_messages rows, commit.
 The send_outbound job then sends them. Re-running a turn whose reply exists
 just returns that reply's pending rows, so a retried job never replies twice.
 
+Tier 1 ends in the turn: the turn's clip leaves it accepted, needs_review or
+rejected (finish_arrival_checks), so a clip still 'pending' is one whose turn
+never finished.
+
 States: idle | awaiting_ready | in_session | awaiting_continue | awaiting_stop_confirm.
 
 After a gap longer than fresh_start_after_hours since the participant's previous
@@ -107,6 +111,19 @@ def _first_name(participant: Participant) -> str:
 
 def _minutes(value: float) -> str:
     return f"{value:.1f}"
+
+
+def finish_arrival_checks(recording: Recording | None) -> None:
+    """End tier 1 for this turn's clip, on every path: a duplicate is rejected (unless already
+    rejected for another reason); a clip still pending passed the arrival checks, so it is
+    accepted. needs_review and rejected are left as they are. After this only a clip whose
+    turn never finished (the engine failed; the job is retried) is still pending."""
+    if recording is None or recording.status != "stored":
+        return
+    if recording.duplicate_of_recording_id is not None and recording.qc_status != "rejected":
+        recording.qc_status, recording.qc_reason = "rejected", "duplicate"
+    elif recording.qc_status == "pending":
+        recording.qc_status, recording.qc_reason = "accepted", None
 
 
 def length_text(seconds: float) -> str:
@@ -454,7 +471,7 @@ class Engine:
         (e.g. speaker_check_pending for a forwarded or uploaded clip in free speech) keeps its reason."""
         if (
             self.config.clip_checks.problem(recording.active_seconds, recording.duration_s) == "low_speech"
-            and recording.qc_status == "pending"
+            and recording.qc_status in ("pending", "accepted")
         ):
             recording.qc_status, recording.qc_reason = "needs_review", "low_speech"
 
@@ -684,6 +701,7 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
 
         participant = db.scalar(select(Participant).where(Participant.phone_number == message.sender))
         participant_id = participant.participant_id if participant else None
+        recording = db.scalar(select(Recording).where(Recording.inbound_message_id == message.id))
         if participant is None:
             reply = _unregistered_reply(db, message, catalog, now)
         elif participant.status == "withdrawn":
@@ -693,7 +711,6 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
         elif participant.status != "active":
             reply = Reply(parts=[catalog.render("participant.paused")])
         else:
-            recording = db.scalar(select(Recording).where(Recording.inbound_message_id == message.id))
             state = _state_for(db, participant_id)
             before = _snapshot(state)
             turn = Turn(db, message, participant, state, recording, now, _previous_inbound_at(db, message))
@@ -707,6 +724,7 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
                 message.id,
                 state.state,
             )
+        finish_arrival_checks(recording)
 
         if reply is None:
             db.commit()

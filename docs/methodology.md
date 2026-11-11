@@ -223,7 +223,8 @@ Recordings are classified at two levels:
 
 - Each voice note is stored as the original (`.ogg`) plus a 16 kHz mono WAV for QC and ASR, in a
   per-participant folder; files never move. Accepted and rejected sets are produced by export.
-- Exact duplicates (re-sent audio) are detected by content hash.
+- Exact duplicates (re-sent audio) are detected by content hash and rejected (`duplicate`, since
+  2026-11-11): in a session the prompt is sent again (no retake used); they never count.
 - **Audio origin** (from the Meta Cloud API flags), stored per recording:
   - **recorded** (voice note recorded in WhatsApp): accepted as normal.
   - **forwarded** (from another chat, e.g. an older voice note the participant once sent a friend)
@@ -261,8 +262,8 @@ column.
 
 | Tier | When | Who | Recorded in | Values |
 |---|---|---|---|---|
-| 1. Arrival checks | on arrival | the bot | `recordings.qc_status`, `qc_reason` | `pending`, `accepted`, `needs_review`, `rejected` |
-| 2. ASR batch checks | after each transcription batch (twice a day in the pilot) | scoring on the server | `qc_results` (history), `recordings.qc_tier2` | 1 (probably unusable) to 4 (all signals good); empty = not scored |
+| 1. Arrival checks | on arrival | the bot | `recordings.qc_status`, `qc_reason` | `accepted`, `needs_review` (accepted, flagged for a supervisor), `rejected`; `pending` only until the bot has finished its turn (8.2) |
+| 2. ASR batch checks | after each transcription batch (twice a day in the pilot) | scoring on the server | `qc_results` (history), `recordings.qc_tier2` | sentences: 1 (probably unusable) to 4 (all signals good), from CER; empty = not scored, or not applicable (other task types) |
 | 3. Human review | flagged clips and random spot checks | supervisors, in the dashboard | `qc_human_reviews` (history), `recordings.qc_tier3`, `qc_tier3_reason` | `accept`, `reject`; empty = no human decision |
 | Final label | whenever a tier changes | database triggers | `recordings.qc_final` | `bronze`, `silver`, `gold`, `rejected` |
 
@@ -281,6 +282,18 @@ column.
   on the WAV and applies the default audio-origin rule and long flag; once the clip is matched to
   a prompt, the engine applies the task type's rules: audio origin, empty audio, duplicates,
   duration limits (section 4), speech check; retake requests.
+- **Outcome (`qc_status`, since 2026-11-11):** the engine's turn always ends in one of three values,
+  with the reason in `qc_reason`:
+
+  | Value | Meaning | Reasons | Counted toward progress |
+  |---|---|---|---|
+  | `accepted` | Passed the arrival checks; also clips sent outside a session (never counted, as they answer no prompt) | none | yes |
+  | `needs_review` | Passed, but flagged for a supervisor | `low_speech`, `speaker_check_pending` | yes |
+  | `rejected` | Failed | `empty`, `too_short`, `too_long`, `no_speech`, `not_recorded`, `duplicate` | no |
+
+  `pending` is the value while the turn runs: the worker stores the clip, then the engine checks it
+  in a separate step, normally within a second. A clip still `pending` afterwards means the turn
+  failed; the job is retried, and until then the clip is visibly unchecked (Bronze, 8.5).
 - **Speech check (energy-based):** the worker measures each voice note on its 16 kHz WAV and
   stores `active_seconds` (time in 30 ms frames louder than −45 dBFS) and `mean_dbfs` (overall
   level). After the duration check, for all task types:
@@ -335,7 +348,7 @@ column.
     - Tested on real 60–120 s clips with both models before it was enabled.
     - A result for a long clip from an app without long-form (i.e. not yet redeployed) is not
       stored, so the clip is retried.
-  - **Step 2, scoring (being built):** measures every transcribed clip on the droplet's CPU, with
+  - **Step 2, scoring (in place):** measures every transcribed clip on the droplet's CPU, with
     no GPU. A deliberately short set of metrics: each one catches a specific problem that can be
     confirmed by listening to the clip.
 
@@ -391,8 +404,21 @@ column.
     - **Limitations:** WhatsApp's noise suppression can make SNR look better than the room was, so
       SNR is used to rank clips and its cut-offs are calibrated on our data. `active_seconds` is
       energy-based and counts any loud sound, not only speech.
-    - **Tier-2 level (`qc_tier2`):** a whole number from 1 to 4 (empty = not scored yet), stored
-      as `qc_results.band` and copied to `recordings.qc_tier2`. Each level leads to a different
+    - **Levels from CER only, for sentences only (since 2026-11-11, `thresholds_version`
+      `2026-11-11-cer-only`):** on the full pilot (929 clips) only CER separated clips reliably.
+      WADA-SNR saturates at 100 dB on WhatsApp audio (its noise suppression), the compression
+      ratio flags long normal answers, and log-probability and level never triggered. So:
+      - sentences get a level from CER alone (cut-offs below), still capped at 2 when the prompt
+        has digits;
+      - image, conversation-starter and free-speech clips get **no level**: their `qc_results` row
+        has every metric, `band` empty and `band_reason` `not_applicable`, and `qc_tier2` stays
+        empty ("not applicable" in the report);
+      - every other metric is still computed and stored in `qc_results` for every clip, as
+        report-only, to calibrate against supervisors' decisions later. Whether a metric sets a
+        level is a setting per metric in `config/qc_tier2.yaml` (`sets_level`), so one can be
+        switched back on with a re-score and no code change.
+    - **Tier-2 level (`qc_tier2`):** a whole number from 1 to 4 (empty = not scored yet, or not
+      applicable), stored as `qc_results.band` and copied to `recordings.qc_tier2`. Each level leads to a different
       action; the values deliberately differ from `qc_status` so the two can't be confused.
 
       | Level | Meaning | Action |
@@ -410,8 +436,9 @@ column.
       skipped. Tier 2 never rejects: even level 1 waits for a human. CER and WER use `jiwer`
       (the version used in the model comparison) and the training normaliser.
 
-      **Cut-offs (provisional, `thresholds_version` 2026-11-10-provisional; to be calibrated on
-      pilot data by listening to a sample per level and task type):**
+      **Cut-offs (first set 2026-11-10, `2026-11-10-provisional`; to be calibrated on pilot data
+      by listening to a sample per level and task type). Since 2026-11-11 only the `cer` and
+      `has_digits` rows set a level; the others are kept in the config, switched off:**
 
       | Metric | Applies to | 4 | 3 | 2 | 1 |
       |---|---|---|---|---|---|
@@ -448,17 +475,36 @@ column.
   - clips at tier-2 levels 1 and 2, lowest first;
   - a random spot-check sample of Silver clips, at a configured rate with a daily cap.
 - **Decisions:** `accept` or `reject`. A rejection needs a reason from a fixed list:
-  `wrong_sentence`, `noise`, `not_own_voice`, `unclear`, `not_chichewa`, `other` (with a note).
-  Escalations and follow-ups with contributors are kept in the dashboard; they are not QC decisions.
-- **Where decisions are recorded:** `qc_human_reviews`, one row per decision (recording, decision,
-  reason, note, reviewer, time, a unique operation key so a retried request is never saved twice,
-  and when the contributor was told). Rows are only added, never changed; a reversal is a new row,
-  and the latest row is the current verdict. A trigger copies it to `recordings.qc_tier3` and
-  `qc_tier3_reason`. The dashboard's database account may only add rows to this table; it has no
-  rights on `recordings`.
-- **Status (2026-11-10):** the dashboard's first version wrote decisions directly into
-  `qc_status`; this was switched off before any decision was written. `qc_human_reviews` and its
-  triggers come with the next migration; until then decisions are not recorded on the server.
+  `wrong_sentence` (not the sentence shown), `no_speech` (silence or no voice), `noise`
+  (background noise drowns the speech), `unclear` (mumbled, cut off, distorted), `not_own_voice`
+  (another speaker, or a forwarded clip of someone else), `not_chichewa` (another language), or
+  `other` (with a note). Escalations and follow-ups with contributors are kept in the dashboard;
+  they are not QC decisions.
+- **Where decisions are recorded:** `qc_human_reviews`, one row per decision:
+  - **Columns:** recording, decision, reason, note (required for `other`; at most 500 characters),
+    reviewer ID and name, time, a unique operation key, and `notified_at` (when the contributor
+    was told). The operation key means a retried request is never saved twice.
+  - **Rules:** checked by the database, which refuses a rejection without a reason, a reason on an
+    acceptance, `other` without a note, and unknown decisions or reasons.
+  - **Append-only:** rows are only added. A database trigger refuses any change or deletion,
+    whoever tries it (error code `QC405`). The one exception is setting `notified_at` once, from
+    empty to a time. A reversal, or an administrator's correction, is a new row, and the latest
+    row (`created_at`, then `id`) is the current verdict.
+  - **Copied to the recording:** a trigger copies each new decision to `recordings.qc_tier3` and
+    `qc_tier3_reason` in the same transaction, which in turn sets `qc_final` (8.5) and
+    `updated_at`. `qc_status` is never changed.
+  - **No overwriting each other:** the trigger locks the recording first. If the dashboard says
+    which decision it expects to replace (the transaction setting `masakhane.expected_qc_tier3`:
+    `accept`, `reject`, or `__NULL__` for none), a different current decision refuses the new one
+    (error code `QC409`). Of two supervisors deciding the same clip at once, only the first is
+    saved; the second is told to refresh.
+  - **Rights:** the dashboard's database account may only add rows to this table (and read them);
+    it has no rights on `recordings`. The trigger runs with the table owner's rights, which is
+    what lets a decision reach `recordings`.
+- **Status (2026-11-11):** the table and triggers are in place (migration `d9f4b2c8e631`). The
+  dashboard's write-back stays off until it has been tested against them on a copy of the data.
+  The dashboard's first version wrote decisions directly into `qc_status`; this was switched off
+  on 2026-11-10 before any decision was written.
 - **Contributors are told about rejections:** a daily digest per contributor (which clips, why,
   minutes left), within WhatsApp's 24-hour window or as an approved template (planned). A clip
   rejected by a supervisor stops counting toward the contributor's minutes only once they have been
@@ -477,17 +523,30 @@ exactly one label.
 | **Gold** | Validated by a human (`qc_tier3 = accept`) | Training data; the only source for dev and test sets |
 | **Rejected** | Not usable, with the reason and the tier that decided | Not released; kept |
 
-Rules, applied in order (the first that matches decides):
+Rules, applied in order (the first that matches decides). They live in one database function,
+`qc_final_label()`, used by the trigger on `recordings`. The task type comes from the clip's
+assignment.
 
-1. A human decision wins (the latest one): `accept` → Gold, `reject` → Rejected.
-2. Tier 1 rejected (`qc_status = rejected`) → Rejected.
-3. Tier 1 flagged (`qc_status = needs_review`) → Bronze until a supervisor decides (proposed; e.g.
-   forwarded clips waiting for a speaker check).
-4. Tier-2 level 3 or 4 → Silver.
-5. Otherwise Bronze: tier-2 level 1 or 2 (waiting for review) or not yet scored.
+1. **A human decision wins** (the latest one): `accept` → Gold, `reject` → Rejected. This
+   overrides tier 1 too.
+2. **Tier 1 rejected** (`qc_status = rejected`) → Rejected.
+3. **Tier 1 flagged or not finished** (`qc_status` `needs_review` or `pending`) → Bronze until a
+   supervisor decides (e.g. forwarded clips waiting for a speaker check), even at tier-2 level 4.
+4. **Sentences:** tier-2 level 3 or 4 → Silver; otherwise (level 1 or 2, or not yet scored) →
+   Bronze.
+5. **Image, conversation-starter and free-speech clips** (tier 2 not applicable) → Silver.
+6. **Unassigned recordings** (no assignment) → Bronze: never counted, never exported.
 
-Clips only move up by automatic checks; only a human moves a clip to Gold or rejects a Silver or
-Gold clip.
+- **What Silver means for spontaneous speech (decision 2026-11-11):** a spontaneous clip accepted
+  on arrival is Silver. It has passed the arrival checks (duration, speech, audio origin) but no
+  automatic check of its content, because tier 2 has no reliable signal for spontaneous speech
+  yet. Its quality rests on the arrival checks and on supervisors' spot checks, which measure it.
+  This is revisited when tier 2 has such a signal.
+- **When it changes:** `qc_final` is recomputed whenever `qc_status`, `qc_tier2`, `qc_tier3` or the
+  assignment changes, and `updated_at` moves with it, so the dashboard's incremental sync sees
+  the change.
+- **Movement:** clips only move up by automatic checks; only a human moves a clip to Gold, rejects
+  a Silver or Gold clip, or overrides a tier-1 rejection.
 
 - **Measuring Silver quality:** the share of spot-checked Silver clips that supervisors reject
   estimates how trustworthy Silver is (reported per round and per contributor, and in the dataset
@@ -568,4 +627,9 @@ Gold clip.
 | 2026-11-10 | QC protocol: three tiers plus a final label. Tier 1 `qc_status` (never overwritten), tier 2 `qc_tier2` 1–4, tier 3 `qc_tier3` accept/reject with a reason list (decisions in an append-only `qc_human_reviews`, copied by trigger), final `qc_final` Bronze/Silver/Gold/Rejected by trigger with a fixed precedence (human, tier-1 rejection, tier-1 flag, tier 2). Gold = human-validated; dev/test sets from Gold only; Silver quality measured by spot checks. Based on Common Voice, LibriSpeech, GigaSpeech, NaijaVoices |
 | 2026-11-10 | Supervision dashboard (Hostinger, read-only gateway on the server) live for viewing; its direct write-back to `qc_status` switched off before use; decisions to be recorded in `qc_human_reviews`. A supervisor-rejected clip stops counting once the contributor is notified |
 | 2026-11-10 | Tier-2 levels 1–4 (4 good, 3 borderline, 2 review, 1 probably unusable), combined by weakest link across metrics with the limiting metric(s) recorded; provisional cut-offs in config, calibrated on pilot data |
+| 2026-11-11 | Tier 2 on CER only: the full pilot (929 clips) showed only CER separates clips (WADA-SNR saturates on WhatsApp audio, compression ratio flags long normal answers, log-probability and level never trigger). Sentences get a level from CER (cut-offs unchanged, digits cap kept); image, conversation-starter and free-speech clips get none (`not_applicable`, `qc_tier2` empty). All metrics still computed and stored for calibration; a per-metric `sets_level` setting switches one back on. `thresholds_version` 2026-11-11-cer-only |
+| 2026-11-11 | Tier 3 recorded in `qc_human_reviews` (append-only; the dashboard may only insert), copied by trigger to `recordings.qc_tier3` / `qc_tier3_reason`, with the dashboard's compare-and-set check (refused with error code QC409 if the current decision isn't the expected one). Rejection reasons: `wrong_sentence`, `no_speech`, `noise`, `unclear`, `not_own_voice`, `not_chichewa`, `other` (with a note) |
+| 2026-11-11 | Final label `qc_final` set by a database trigger from one function (`qc_final_label`): human decision, then tier-1 rejection, then tier-1 flag or pending (Bronze), then sentences by tier 2 (3–4 Silver, else Bronze), spontaneous types Silver, unassigned Bronze |
+| 2026-11-11 | Spontaneous clips (image, conversation starter, free speech) accepted on arrival are Silver until tier 2 has a reliable signal for them; Silver quality for them is measured by supervisors' spot checks |
+| 2026-11-11 | Tier-1 outcome made explicit: every clip leaves the bot's turn `accepted`, `needs_review` (accepted and counted, flagged for a supervisor: `low_speech`, `speaker_check_pending`) or `rejected`; clips sent outside a session are `accepted` (still never counted); exact duplicates are `rejected` (`duplicate`). `pending` now means only that the bot's turn didn't finish (the job is retried). Until then passing clips kept the default `pending` (pilot: 1,059) and so were all Bronze; migration `e2a6c4f8b913` set finished ones to `accepted`. Progress counts unchanged |
 | 2026-11-08 | Bot instructions shortened, since contributors get a full guide: three general tips (quiet place and pauses, swipe-reply to redo, PROGRESS) and one or two lines per task type with its length limit; no change to behaviour |

@@ -42,7 +42,7 @@ labelled data to choose and calibrate a reliable audio-quality measure.
 
 About one working week from recording to labelled data.
 
-- [ ] Read `docs/onboarding.md` and `docs/methodology.md` section 8, then the recording guide and the labelling plan
+- [ ] Read `docs/onboarding-ange.md` and `docs/methodology.md` section 8, then the recording guide and the labelling plan
 - [ ] Settle the open decisions below with Dunstan
 - [ ] Prepare a consent form for the speakers, including open publication of their clips
 - [ ] Recruit the 10 speakers and 3 raters (raters must not be speakers)

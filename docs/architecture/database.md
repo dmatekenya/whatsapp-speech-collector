@@ -1,6 +1,6 @@
 # Database schema
 
-Last updated: 2026-11-10
+Last updated: 2026-11-11
 
 Postgres is the system of record. Files (audio, prompt images) live on disk in `data/`: in the
 repo locally, and on the droplet in `~/whatsapp-speech-collector/data/`, bind-mounted into the
@@ -25,6 +25,7 @@ relative to a configurable root. Schema changes are made only through Alembic mi
 | `asr_batches` | One row per run of the ASR batch (Modal transcription) | `id` | No |
 | `transcripts` | Transcripts of recordings: ASR per model and run (later human) | `id` | No (recording ID only; the text is the participant's speech) |
 | `qc_results` | Tier-2 quality results: metrics and a level 1-4 per scoring run per recording | `id` | No (IDs and numbers only) |
+| `qc_human_reviews` | Tier-3 supervisor decisions (accept / reject), append-only | `id`, `operation_key` | No (supervisor ID and display name; recording IDs) |
 | `alembic_version` | Which migrations have been applied (managed by Alembic) | | No |
 
 ## How they connect
@@ -47,6 +48,7 @@ erDiagram
   ASR_BATCHES ||--o{ TRANSCRIPTS : wrote
   RECORDINGS ||--o{ QC_RESULTS : "scored as"
   TRANSCRIPTS ||--o{ QC_RESULTS : "scored from"
+  RECORDINGS ||--o{ QC_HUMAN_REVIEWS : "reviewed in"
 ```
 
 A voice note's journey: `inbound_messages` (raw) → `recordings` (stored audio) → linked to an
@@ -108,10 +110,13 @@ and rejected views are produced by export.
 | `audio_origin` | text | `recorded`, `forwarded`, `uploaded` or `unknown`, from the two columns above: forwarded wins, then `is_voice_note`; Twilio rows are `unknown`. `config/assignment_settings.yaml` (`audio_origin`) decides what happens: forwarded and uploaded are rejected (`not_recorded`) except in free speech, where they are counted but flagged (`speaker_check_pending`, per-type override in `task_types.free_speech.audio_origin`); recorded and unknown are used as usual. Backfilled for older rows by migration `d8e2b5c1f9a4` |
 | `status` | text | Storage status: `pending`, `stored`, `failed` |
 | `error` | text, nullable | |
-| `qc_status` | text, indexed | Whether the clip is usable: `pending`, `accepted`, `rejected`, `needs_review`. Rejected clips never count toward minutes; `needs_review` ones do |
-| `qc_reason` | text, nullable | `too_short`, `too_long` (limits per task type and origin, config `clip_limits`), `empty`, `no_speech` (under 1.5 s of active audio, or over 30 s with under 20% active) (failed attempts, rejected, set by the conversation engine); `low_speech` (accepted but mostly silence, `needs_review`); `not_recorded` (forwarded or uploaded audio outside free speech, rejected); `speaker_check_pending` (forwarded or uploaded audio in free speech, `needs_review`; also uploads accepted in any task type before 2026-11-07; kept if the clip is also low speech). The QC step will add e.g. `duplicate`, `wrong_sentence` |
+| `qc_status` | text, indexed | Tier 1 (arrival checks): `accepted` (passed), `needs_review` (passed, flagged for a supervisor), `rejected` (failed); `pending` only until the conversation engine finishes the turn (set by `finish_arrival_checks()`; a clip left `pending` means the turn failed). Rejected clips never count toward minutes; `needs_review` ones do. Migration `e2a6c4f8b913` moved clips the engine had finished from `pending` to `accepted` (duplicates to `rejected`) |
+| `qc_reason` | text, nullable | `too_short`, `too_long` (limits per task type and origin, config `clip_limits`), `empty`, `no_speech` (under 1.5 s of active audio, or over 30 s with under 20% active) (failed attempts, rejected, set by the conversation engine); `duplicate` (same audio as an earlier recording, rejected; since 2026-11-11); `low_speech` (accepted but mostly silence, `needs_review`); `not_recorded` (forwarded or uploaded audio outside free speech, rejected); `speaker_check_pending` (forwarded or uploaded audio in free speech, `needs_review`; also uploads accepted in any task type before 2026-11-07; kept if the clip is also low speech). Null for `accepted` |
 | `snr_db` | float, nullable | WADA-SNR estimate of the WAV (dB, −20 to 100), computed once by tier-2 scoring (`src/qc/metrics.py`). Null until scored, or if the WAV couldn't be read. Added by migration `b4e81c6d2a57` |
-| `qc_tier2` | smallint, nullable, check 1–4 | Tier-2 level: a copy of the latest `qc_results.band` (4 usable as is … 1 probably unusable). Null = not scored (also never for unassigned recordings). Never changes `qc_status` / `qc_reason`, which are tier 1. Added by migration `b4e81c6d2a57` |
+| `qc_tier2` | smallint, nullable, check 1–4 | Tier-2 level: a copy of the latest `qc_results.band` (4 usable as is … 1 probably unusable). Since 2026-11-11 only sentences get one, from CER. Null = not scored, not applicable (image, conversation starter, free speech) or unassigned. Never changes `qc_status` / `qc_reason`, which are tier 1. Added by migration `b4e81c6d2a57` |
+| `qc_tier3` | text, nullable, check `accept` / `reject` | Tier 3: the latest supervisor decision, copied by the trigger on `qc_human_reviews`. Null = no human decision. Never written by the app or the dashboard directly. Added by `d9f4b2c8e631` |
+| `qc_tier3_reason` | text, nullable | That decision's reason (rejections only) |
+| `qc_final` | text, check `bronze` / `silver` / `gold` / `rejected` | Final label, set by the trigger on `recordings` from `qc_final_label()` (rules in `docs/methodology.md` 8.5) whenever `qc_status`, `qc_tier2`, `qc_tier3` or `assignment_id` changes; existing rows were backfilled. Never written by the app. Added by `d9f4b2c8e631` |
 | `length_flag` | text, nullable | `long_sentence` or `long_clip`: longer than `flag_over` for its task type in `config/assignment_settings.yaml` (`clip_limits`; the default limits outside a session). Kept and counted in full; information for preprocessing (split before training), never a review flag (`qc_status` is unchanged). Null within the limit. Added by migration `f3a7c2d9e816`; older rows null (none was over 29 s) |
 | `created_at`, `updated_at` | timestamptz | |
 
@@ -303,11 +308,52 @@ here. Added by migration `b4e81c6d2a57`.
 | `cer`, `wer` | float, nullable | Sentences only: normalised transcript vs normalised `assignments.prompt_text_snapshot` (jiwer) |
 | `length_ratio` | float, nullable | Sentences only: normalised transcript characters ÷ normalised prompt characters |
 | `has_digits` | bool, nullable | Sentences only: the prompt text contains a digit (CER unreliable; level capped at 2) |
-| `band` | smallint, check 1–4 | The level, by the weakest link (`config/qc_tier2.yaml`) |
-| `band_reason` | text | The metric(s) at the lowest level, e.g. `cer:2`, `compression_ratio:1,word_count:1`; `all_ok` for 4 |
+| `band` | smallint, nullable, check 1–4 | The level, by the weakest link (`config/qc_tier2.yaml`). Null exactly when `band_reason` is `not_applicable` (check constraint; nullable since `c7d3a9e5f218`) |
+| `band_reason` | text | The metric(s) at the lowest level, e.g. `cer:2`; `all_ok` for 4; `not_applicable` for task types that get no level (since 2026-11-11 all but sentences) |
 | `metrics_version` | text | How the metrics were computed (`1`) |
 | `thresholds_version` | text | The cut-offs used (e.g. `2026-11-10-provisional`) |
 | `created_at` | timestamptz | |
+
+### qc_human_reviews
+
+Tier 3: one row per supervisor decision, inserted by the supervision gateway
+(`docs/methodology.md` 8.4). Append-only: a reversal is a new row, and the latest per recording
+(`created_at`, then `id`) is the verdict, copied to `recordings.qc_tier3`. Added by migration
+`d9f4b2c8e631`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | bigint, identity (always), PK | The inserting role needs no sequence rights |
+| `recording_id` | bigint, FK → recordings (ON DELETE RESTRICT) | Index on (`recording_id`, `created_at`, `id`); not unique |
+| `decision` | text | `accept` or `reject` |
+| `reason_code` | text, nullable | Required exactly when rejected: `wrong_sentence`, `no_speech`, `noise`, `unclear`, `not_own_voice`, `not_chichewa`, `other` |
+| `note` | text, nullable | At most 500 characters; required (not blank) for `other` |
+| `reviewer_id`, `reviewer_name` | text | From the dashboard's authenticated session; not blank |
+| `operation_key` | uuid, unique | The gateway's idempotency key |
+| `created_at` | timestamptz, default now() | |
+| `notified_at` | timestamptz, nullable | When the contributor was told; may be set once (the only allowed update) |
+
+## Triggers and functions
+
+| Name | On | What it does |
+|---|---|---|
+| `qc_final_label(qc_status, qc_tier2, qc_tier3, task_type)` | function | The final-label rules (methodology 8.5), first match wins. The only place they live |
+| `trg_recordings_qc_final` → `recordings_set_qc_final()` | `recordings`, BEFORE INSERT OR UPDATE OF `qc_status`, `qc_tier2`, `qc_tier3`, `assignment_id` | Sets `qc_final` from `qc_final_label()` (task type from the assignment); sets `updated_at = now()` when `qc_tier2`, `qc_tier3` or `qc_final` changed |
+| `trg_qc_human_reviews_apply` → `qc_human_reviews_apply()` | `qc_human_reviews`, AFTER INSERT, SECURITY DEFINER (owner's rights, `search_path = public, pg_temp`, EXECUTE revoked from PUBLIC) | Locks the recording (`FOR UPDATE`); if the transaction setting `masakhane.expected_qc_tier3` is set (`accept`, `reject`, `__NULL__` = none), it must equal the current `qc_tier3`, else **SQLSTATE `QC409`**; then copies `decision` and `reason_code` to the recording. AFTER, so a row skipped by `ON CONFLICT DO NOTHING` has no effect |
+| `trg_qc_human_reviews_append_only` → `qc_human_reviews_append_only()` | `qc_human_reviews`, BEFORE UPDATE OR DELETE | Refuses with **SQLSTATE `QC405`**, except setting `notified_at` once (from null, nothing else changed) |
+
+To correct a decision, insert a new one; the latest row wins. TRUNCATE (owner only) isn't
+blocked.
+
+## Rights (droplet roles)
+
+Granted by migration `d9f4b2c8e631` only where the role exists (not on laptops or the test
+database):
+
+| Role | Rights |
+|---|---|
+| `masakhane_qc_writer` (the gateway's writer; NOLOGIN until enabled) | INSERT, SELECT on `qc_human_reviews`; all rights on `recordings` revoked (table and columns; decisions reach it only through the trigger). Nothing else |
+| `masakhane_supervision_ro`, `sc_readonly` | SELECT on `qc_human_reviews` and `qc_results` (they already read `recordings`) |
 
 ## Files on disk
 

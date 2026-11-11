@@ -1,3 +1,4 @@
+import uuid
 from datetime import date, datetime
 from typing import Any
 
@@ -7,13 +8,16 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    FetchedValue,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     SmallInteger,
     Text,
     UniqueConstraint,
+    Uuid,
     func,
 )
 from sqlalchemy import text as sql_text  # Prompt has a column named "text"
@@ -23,6 +27,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 STATUSES = ("received", "queued", "processed", "failed", "unregistered")
 RECORDING_STATUSES = ("pending", "stored", "failed")
 QC_STATUSES = ("pending", "accepted", "rejected", "needs_review")
+# Tier 3 (supervisors) and the final label: docs/methodology.md 8.4-8.5; the rules are in the
+# database function qc_final_label() (migration d9f4b2c8e631).
+QC_TIER3_DECISIONS = ("accept", "reject")
+QC_TIER3_REASONS = ("wrong_sentence", "no_speech", "noise", "unclear", "not_own_voice", "not_chichewa", "other")
+QC_FINAL_LABELS = ("bronze", "silver", "gold", "rejected")
 SESSION_STATUSES = ("active", "completed", "paused", "abandoned")
 ASSIGNMENT_STATUSES = ("sent", "recorded", "accepted", "rejected", "expired", "skipped")
 # "inactive" is kept for rows imported before paused/completed existed.
@@ -201,6 +210,8 @@ class Recording(Base):
         CheckConstraint(_in_check("audio_origin", AUDIO_ORIGINS), name="ck_recordings_audio_origin"),
         CheckConstraint(_in_check("length_flag", LENGTH_FLAGS), name="ck_recordings_length_flag"),
         CheckConstraint("qc_tier2 BETWEEN 1 AND 4", name="ck_recordings_qc_tier2"),
+        CheckConstraint(_in_check("qc_tier3", QC_TIER3_DECISIONS), name="ck_recordings_qc_tier3"),
+        CheckConstraint(_in_check("qc_final", QC_FINAL_LABELS), name="ck_recordings_qc_final"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -268,6 +279,14 @@ class Recording(Base):
     # Tier-2 level 1-4: a copy of the latest qc_results.band (None: not scored). Tier 2
     # never changes qc_status / qc_reason (tier 1).
     qc_tier2: Mapped[int | None] = mapped_column(SmallInteger)
+    # Tier 3: the latest supervisor decision (accept / reject) and its reason, copied from
+    # qc_human_reviews by a trigger. Never written by the app.
+    qc_tier3: Mapped[str | None] = mapped_column(Text)
+    qc_tier3_reason: Mapped[str | None] = mapped_column(Text)
+    # Final label (bronze / silver / gold / rejected), set by the recordings trigger from
+    # qc_final_label() whenever qc_status, qc_tier2, qc_tier3 or assignment_id changes.
+    # Never written by the app (FetchedValue: the database fills it).
+    qc_final: Mapped[str] = mapped_column(Text, nullable=False, server_default=FetchedValue())
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -517,7 +536,11 @@ class QcResult(Base):
             name="fk_qc_results_transcript_recording",
             ondelete="RESTRICT",
         ),
-        CheckConstraint("band BETWEEN 1 AND 4", name="ck_qc_results_band"),
+        CheckConstraint("band IS NULL OR band BETWEEN 1 AND 4", name="ck_qc_results_band"),
+        # No level exactly when the clip's task type gets none (or no level-setting metric applied).
+        CheckConstraint(
+            "(band IS NULL) = (band_reason = 'not_applicable')", name="ck_qc_results_band_not_applicable"
+        ),
         Index("ix_qc_results_recording_created_id", "recording_id", "created_at", "id"),
     )
 
@@ -535,11 +558,59 @@ class QcResult(Base):
     wer: Mapped[float | None] = mapped_column(Float)
     length_ratio: Mapped[float | None] = mapped_column(Float)
     has_digits: Mapped[bool | None] = mapped_column(Boolean)
-    band: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    # The metric(s) at the lowest level, e.g. "cer:2" or "compression_ratio:1,word_count:1"; "all_ok" for 4.
+    # The level 1-4; None ("not_applicable") for task types that get no level (since
+    # 2026-11-11 only sentences get one).
+    band: Mapped[int | None] = mapped_column(SmallInteger)
+    # The metric(s) at the lowest level, e.g. "cer:2"; "all_ok" for 4; "not_applicable" without a level.
     band_reason: Mapped[str] = mapped_column(Text, nullable=False)
     metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
     thresholds_version: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+# =========
+# QC TIER 3
+# =========
+class QcHumanReview(Base):
+    """One supervisor decision on one recording (tier 3), inserted by the supervision gateway.
+
+    Append-only: a trigger refuses UPDATE and DELETE (except setting notified_at once); a
+    reversal is a new row, and the latest (created_at, then id) is the verdict. Another trigger
+    copies each new decision to recordings.qc_tier3 / qc_tier3_reason, after checking the
+    gateway's expected state (SQLSTATE QC409 on a mismatch). See migration d9f4b2c8e631.
+    """
+
+    __tablename__ = "qc_human_reviews"
+    __table_args__ = (
+        CheckConstraint(_in_check("decision", QC_TIER3_DECISIONS), name="ck_qc_human_reviews_decision"),
+        CheckConstraint(_in_check("reason_code", QC_TIER3_REASONS), name="ck_qc_human_reviews_reason_code"),
+        CheckConstraint("(decision = 'reject') = (reason_code IS NOT NULL)", name="ck_qc_human_reviews_reason_when_rejected"),
+        CheckConstraint(
+            "reason_code IS DISTINCT FROM 'other' OR btrim(coalesce(note, '')) <> ''",
+            name="ck_qc_human_reviews_note_for_other",
+        ),
+        CheckConstraint("note IS NULL OR char_length(note) <= 500", name="ck_qc_human_reviews_note_length"),
+        CheckConstraint("btrim(reviewer_id) <> '' AND btrim(reviewer_name) <> ''", name="ck_qc_human_reviews_reviewer"),
+        UniqueConstraint("operation_key", name="uq_qc_human_reviews_operation_key"),
+        Index("ix_qc_human_reviews_recording_created_id", "recording_id", "created_at", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    recording_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("recordings.id", ondelete="RESTRICT", name="fk_qc_human_reviews_recording_id"),
+        nullable=False,
+    )
+    decision: Mapped[str] = mapped_column(Text, nullable=False)  # accept, reject
+    reason_code: Mapped[str | None] = mapped_column(Text)  # required exactly when rejected
+    note: Mapped[str | None] = mapped_column(Text)  # required for reason "other"; at most 500 characters
+    reviewer_id: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer_name: Mapped[str] = mapped_column(Text, nullable=False)
+    operation_key: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)  # the gateway's idempotency key
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    # When the contributor was told about the decision (planned digest); set once.
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

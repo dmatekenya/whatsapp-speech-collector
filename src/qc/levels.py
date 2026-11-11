@@ -1,8 +1,12 @@
 """Tier-2 levels: config/qc_tier2.yaml and the weakest-link rule.
 
-Each metric gets a level from its cut-offs; the clip's level is the lowest (4 if none is
-lower). band_reason lists the metric(s) at that level, sorted by name, e.g. "cer:2" or
-"compression_ratio:1,word_count:1"; "all_ok" for level 4.
+Only task types in levelled_task_types get a level (since 2026-11-11: sentences); the others
+get none (band None, band_reason "not_applicable"). For those that do, each metric that sets a
+level (sets_level: true) gets one from its cut-offs, and the clip's level is the lowest (4 if
+none is lower). band_reason lists the metric(s) at that level, sorted by name, e.g. "cer:2";
+"all_ok" for level 4. Report-only metrics (sets_level: false) are still computed and stored.
+A levelled clip with no level-setting metric (e.g. a sentence without prompt text, so no CER)
+also gets none.
 """
 
 from pathlib import Path
@@ -17,6 +21,7 @@ from src.tasks.config import get_collection_config
 
 DEFAULT_PATH = PROJECT_ROOT / "config" / "qc_tier2.yaml"
 ALL_OK = "all_ok"
+NOT_APPLICABLE = "not_applicable"
 # Metrics that can have cut-offs (wer and length_ratio are stored but set no level).
 LEVELLED_METRICS = ("cer", "compression_ratio", "words_per_second", "avg_logprob", "snr_db", "speech_ratio", "mean_dbfs")
 Level = int
@@ -51,6 +56,7 @@ class Band(_Model):
 
 
 class MetricLevels(_Model):
+    sets_level: bool = True  # false: computed, stored and reported, but sets no level
     applies_to: list[str] | None = None  # task types; None: all
     bands: list[Band] = Field(min_length=1)
     otherwise: int = Field(ge=1, le=4)
@@ -69,6 +75,7 @@ class MetricLevels(_Model):
 
 
 class WordCountRules(_Model):
+    sets_level: bool = True
     empty_level: int = Field(ge=1, le=4)
     short_under: int = Field(gt=0)
     short_level: int = Field(ge=1, le=4)
@@ -76,6 +83,7 @@ class WordCountRules(_Model):
 
 
 class DigitsCap(_Model):
+    sets_level: bool = True
     applies_to: list[str]
     max_level: int = Field(ge=1, le=4)
 
@@ -84,6 +92,8 @@ class QcConfig(_Model):
     metrics_version: str
     thresholds_version: str = Field(min_length=1)
     model: str = Field(min_length=1)
+    # Task types that get a level; clips of other types get none ("not_applicable").
+    levelled_task_types: list[str]
     levels: dict[str, MetricLevels]
     word_count: WordCountRules
     has_digits: DigitsCap
@@ -98,7 +108,7 @@ class QcConfig(_Model):
                 f"metrics_version is {self.metrics_version!r} but the code computes version {METRICS_VERSION!r}"
             )
         task_types = set(get_collection_config().task_types)
-        named = [*self.word_count.short_applies_to, *self.has_digits.applies_to]
+        named = [*self.levelled_task_types, *self.word_count.short_applies_to, *self.has_digits.applies_to]
         for rules in self.levels.values():
             named += rules.applies_to or []
         wrong = sorted(set(named) - task_types)
@@ -123,30 +133,35 @@ def load_qc_config(path: Path = DEFAULT_PATH) -> QcConfig:
 # LEVELS
 # ======
 def metric_levels(metrics: dict[str, Any], task_type: str, config: QcConfig) -> dict[str, Level]:
-    """The level each applicable, present metric gives (metrics: name -> value or None)."""
+    """The level each level-setting, applicable, present metric gives (metrics: name -> value or None)."""
     levels: dict[str, Level] = {}
     for name, rules in config.levels.items():
         value = metrics.get(name)
-        if value is None or (rules.applies_to is not None and task_type not in rules.applies_to):
+        if not rules.sets_level or value is None or (rules.applies_to is not None and task_type not in rules.applies_to):
             continue
         levels[name] = rules.level(float(value))
     words = metrics.get("word_count")
     rules = config.word_count
-    if words is not None:
+    if rules.sets_level and words is not None:
         if words == 0:
             levels["word_count"] = rules.empty_level
         elif words < rules.short_under and task_type in rules.short_applies_to:
             levels["word_count"] = rules.short_level
     cap = config.has_digits
-    if metrics.get("has_digits") is True and task_type in cap.applies_to:
+    if cap.sets_level and metrics.get("has_digits") is True and task_type in cap.applies_to:
         levels["has_digits"] = cap.max_level
     return levels
 
 
-def clip_level(metrics: dict[str, Any], task_type: str, config: QcConfig) -> tuple[Level, str]:
-    """(band, band_reason) by the weakest link."""
+def clip_level(metrics: dict[str, Any], task_type: str, config: QcConfig) -> tuple[Level | None, str]:
+    """(band, band_reason) by the weakest link; (None, "not_applicable") for a task type that
+    gets no level, or when no level-setting metric applies."""
+    if task_type not in config.levelled_task_types:
+        return None, NOT_APPLICABLE
     levels = metric_levels(metrics, task_type, config)
-    lowest = min(levels.values(), default=4)
+    if not levels:
+        return None, NOT_APPLICABLE
+    lowest = min(levels.values())
     if lowest >= 4:
         return 4, ALL_OK
     return lowest, ",".join(f"{name}:{level}" for name, level in sorted(levels.items()) if level == lowest)

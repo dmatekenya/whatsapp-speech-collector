@@ -6,8 +6,9 @@ model, and not from a test participant unless include_test. The transcript score
 model's latest for the recording (created_at, then id).
 
 Per recording, in one transaction: recordings.snr_db if it is missing, a new qc_results row,
-and recordings.qc_tier2 = that row's band. Nothing else: never qc_status or qc_reason, and
-nothing is sent to participants.
+and recordings.qc_tier2 = that row's band (None for task types that get no level). Nothing
+else: never qc_status or qc_reason, and nothing is sent to participants. The recordings
+trigger then recomputes qc_final and, when qc_tier2 changed, updated_at.
 
 Logs recording IDs and counts only: never transcripts, names or numbers.
 """
@@ -20,7 +21,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Engine, exists, select, text, update
+from sqlalchemy import Engine, exists, func, select, text, update
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -171,7 +172,7 @@ class Scored:
 
     item: Item
     metrics: dict[str, Any]
-    band: int
+    band: int | None  # None: no level for this task type ("not_applicable")
     band_reason: str
     new_snr_db: float | None = None  # computed this run (snr_db was missing)
 
@@ -191,7 +192,7 @@ class ReportRow:
     task_type: str
     prompt_id: str | None
     wav_path: str | None
-    band: int
+    band: int | None
     band_reason: str
     metrics: dict[str, Any] = field(default_factory=dict)
 
@@ -239,7 +240,9 @@ def score_item(item: Item, config: QcConfig, storage: FileStorage) -> Scored:
 
 def write_scored(db: Session, scored: Scored, config: QcConfig, now: datetime) -> QcResult:
     """snr_db (if new), the qc_results row and qc_tier2, in the caller's transaction.
-    updated_at is left as it was: these are derived values, not a change to the recording."""
+    updated_at is not set here (and snr_db leaves it as it was); the recordings trigger bumps
+    it when qc_tier2 (and so possibly qc_final) actually changes, which is what the supervision
+    gateway's incremental sync reads."""
     item = scored.item
     if scored.new_snr_db is not None:
         db.execute(
@@ -316,6 +319,30 @@ def run_scoring(
         config.thresholds_version, " DRY RUN" if dry_run else "", len(result.scored), len(result.failed_ids),
     )  # fmt: skip
     return result
+
+
+def count_untranscribed(db: Session, config: QcConfig, filters: Filters) -> int:
+    """Eligible recordings (stored, not rejected, assigned, not test unless include_test) with
+    no transcript from the configured model yet: waiting for the ASR batch."""
+    has_transcript = exists().where(
+        Transcript.recording_id == Recording.id, Transcript.source == "asr", Transcript.model_key == config.model
+    )
+    query = (
+        select(func.count(Recording.id))
+        .join(Assignment, Assignment.id == Recording.assignment_id)
+        .join(Participant, Participant.participant_id == Recording.participant_id)
+        .where(Recording.status == "stored", Recording.qc_status != "rejected", ~has_transcript)
+    )
+    if not filters.include_test:
+        query = query.where(Participant.is_test.is_(False))
+    if filters.recording_ids:
+        query = query.where(Recording.id.in_(filters.recording_ids))
+    if filters.participants:
+        query = query.where(Recording.participant_id.in_(filters.participants))
+    if filters.since:
+        start = datetime(filters.since.year, filters.since.month, filters.since.day, tzinfo=LOCAL_TZ)
+        query = query.where(Recording.created_at >= start)
+    return db.scalar(query) or 0
 
 
 # ===============

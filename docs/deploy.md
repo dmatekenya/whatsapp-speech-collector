@@ -873,8 +873,10 @@ docker compose exec postgres psql -U speech -d speech_collector -c \
 ### Tier-2 scoring (step 2)
 
 After each ASR batch, the droplet scores the clips it transcribed: a few metrics per clip (SNR,
-words per second, model confidence, repeated phrases; for sentences, CER against the prompt) and a
-level from 1 to 4. The level is stored in `recordings.qc_tier2`, and the details in `qc_results`.
+words per second, model confidence, repeated phrases; for sentences, CER against the prompt). Since
+2026-11-11 only sentences get a level from 1 to 4, from CER alone; other task types get the
+metrics but no level ("not applicable"). The level is stored in `recordings.qc_tier2`, and the
+details in `qc_results`.
 It runs on the droplet's CPU. It never rejects a clip, never changes `qc_status`, and sends
 nothing to participants. A scoring error doesn't fail the ASR batch: those clips are scored next
 time. The design and the levels are in `docs/methodology.md` (section 8). The cut-offs are in
@@ -939,6 +941,99 @@ the next run picks those clips up.
 
 3. Copy the edited file into the repo on your Mac and commit it, as for `config/asr_batch.yaml`.
    Otherwise `./scripts/deploy.sh` may stop at `git pull`.
+
+### Tier 3 and the final label
+
+Supervisors' decisions (tier 3) go into `qc_human_reviews`, inserted by the supervision gateway.
+Database triggers copy them to `recordings.qc_tier3` and keep `recordings.qc_final` (Bronze,
+Silver, Gold, Rejected) up to date (`docs/methodology.md` 8.4–8.5;
+`docs/architecture/database.md`, "Triggers and functions"). Nothing in the bot or the scoring
+writes `qc_final`.
+
+**Deploying it** (migrations `c7d3a9e5f218`, `d9f4b2c8e631` and `e2a6c4f8b913`), **on the droplet**.
+This changes the live bot's arrival code (tier 1 now sets `accepted`, and rejects duplicates), so
+deploy between rounds, not mid-round:
+
+1. Take a backup, then update. `deploy.sh` applies the migrations. They backfill `qc_final` for
+   every recording, grant the gateway's roles their rights (writer: insert and read
+   `qc_human_reviews` only), and move clips the bot has finished from `qc_status` `pending` to
+   `accepted` (duplicates to `rejected`, `duplicate`).
+
+   ```bash
+   cd /home/dun/WhatsApp-speech-collector
+   ./scripts/backup_db.sh
+   ./scripts/deploy.sh
+   docker compose logs migrate --tail 5      # ... -> d9f4b2c8e631, -> e2a6c4f8b913
+   ```
+
+   Afterwards no clip should stay `pending` for more than a few seconds; one that does had its
+   turn fail (check the worker log for its message):
+
+   ```bash
+   docker compose exec postgres psql -U speech -d speech_collector -c \
+     "select id, created_at from recordings where status = 'stored' and qc_status = 'pending'
+        and created_at < now() - interval '5 minutes';"
+   ```
+
+2. Re-score tier 2 with the CER-only cut-offs (`2026-11-11-cer-only`). Spontaneous clips lose
+   their level, and sentences keep a CER level:
+
+   ```bash
+   docker compose exec api python -m scripts.score_tier2 --rescore --dry-run
+   docker compose exec api python -m scripts.score_tier2 --rescore
+   ```
+
+3. Check the labels per task type:
+
+   ```bash
+   docker compose exec postgres psql -U speech -d speech_collector -c \
+     "select coalesce(a.prompt_type, 'unassigned') as task_type, r.qc_final, count(*), round(sum(r.duration_s)::numeric / 60, 1) as minutes
+      from recordings r left join assignments a on a.id = r.assignment_id
+      where r.status = 'stored' group by 1, 2 order by 1, 2;"
+   ```
+
+4. Check the gateway's roles (the writer must have no SELECT, INSERT, UPDATE or DELETE on
+   `recordings`, or the gateway refuses to write):
+
+   ```bash
+   docker compose exec postgres psql -U speech -d speech_collector -c \
+     "select r.rolname, r.rolcanlogin,
+             has_table_privilege(r.rolname, 'qc_human_reviews', 'INSERT') as reviews_insert,
+             has_any_column_privilege(r.rolname, 'recordings', 'SELECT') as recordings_select,
+             has_any_column_privilege(r.rolname, 'recordings', 'UPDATE') as recordings_update
+      from pg_roles r where r.rolname in ('masakhane_qc_writer', 'masakhane_supervision_ro', 'sc_readonly');"
+   ```
+
+   The writer stays NOLOGIN, and the gateway's writes stay off, until they have been tested
+   together on a copy of the data.
+
+**Correcting a decision:** rows in `qc_human_reviews` can't be changed or deleted (error
+`QC405`). Insert a new decision for the recording; the latest one wins. **On the droplet:**
+
+```bash
+docker compose exec postgres psql -U speech -d speech_collector -c \
+  "insert into qc_human_reviews (recording_id, decision, reason_code, note, reviewer_id, reviewer_name, operation_key)
+   values (<recording id>, 'accept', null, 'Corrected by admin', 'admin', 'Dunstan', gen_random_uuid());"
+```
+
+**Changing the final-label rules later:** the rules live only in the database function
+`qc_final_label()`. In a new Alembic migration:
+
+1. Replace the function: `CREATE OR REPLACE FUNCTION qc_final_label(...)` with the same
+   signature.
+2. Recompute every row once:
+
+   ```sql
+   UPDATE recordings r
+   SET qc_final = qc_final_label(r.qc_status, r.qc_tier2, r.qc_tier3,
+                                 (SELECT a.prompt_type FROM assignments a WHERE a.id = r.assignment_id)),
+       updated_at = now()
+   WHERE qc_final IS DISTINCT FROM qc_final_label(r.qc_status, r.qc_tier2, r.qc_tier3,
+                                 (SELECT a.prompt_type FROM assignments a WHERE a.id = r.assignment_id));
+   ```
+
+   Setting `updated_at` on the changed rows lets the dashboard's incremental sync pick them up.
+3. Update `docs/methodology.md` 8.5 and its decision log, and take a backup before deploying.
 
 ---
 

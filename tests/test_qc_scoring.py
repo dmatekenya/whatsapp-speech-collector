@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from sqlalchemy import delete, inspect, select, update
+from sqlalchemy import delete, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from src.asr.batch import after_batch
@@ -204,16 +204,23 @@ def test_what_a_run_writes(people: None, storage: LocalFileStorage) -> None:
     (row,) = results(rid)
     after = recording(rid)
     assert (row.band, row.band_reason, row.stage) == (4, ALL_OK, "asr")
-    assert (row.metrics_version, row.thresholds_version) == ("1", "2026-11-10-provisional")
+    assert (row.metrics_version, row.thresholds_version) == ("1", CONFIG.thresholds_version)
     assert row.cer == 0.0 and row.wer == 0.0 and row.length_ratio == pytest.approx(1.0) and row.has_digits is False
     assert row.word_count == 8 and row.words_per_second == pytest.approx(8 / 4.0)
     assert after.qc_tier2 == 4 and after.snr_db is not None and after.snr_db > 20
-    # Tier 2 never touches tier 1, and the recording's updated_at is unchanged.
-    assert (after.qc_status, after.qc_reason, after.updated_at) == (before.qc_status, before.qc_reason, before.updated_at)
+    # Tier 2 never touches tier 1. The recordings trigger sets qc_final and, as qc_tier2
+    # changed, bumps updated_at (the supervision gateway's incremental sync reads it).
+    assert (after.qc_status, after.qc_reason) == (before.qc_status, before.qc_reason)
+    assert (before.qc_final, after.qc_final) == ("bronze", "silver") and after.updated_at > before.updated_at
 
     (short,) = results(noisy)
     assert short.band == 1 and short.band_reason == "cer:1" and short.length_ratio < 0.5
-    assert recording(noisy).qc_tier2 == 1
+    assert (recording(noisy).qc_tier2, recording(noisy).qc_final) == (1, "bronze")
+
+    # Re-scoring to the same level leaves updated_at alone (nothing a sync needs to see).
+    unchanged = recording(rid).updated_at
+    score(storage, rescore=True)
+    assert recording(rid).updated_at == unchanged and len(results(rid)) == 2
 
 
 def test_snr_is_computed_once(people: None, storage: LocalFileStorage, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,21 +251,46 @@ def test_spontaneous_types_have_no_sentence_metrics(people: None, storage: Local
     score(storage)
     (row,) = results(image)
     assert (row.cer, row.wer, row.length_ratio, row.has_digits) == (None, None, None, None)
-    assert (row.band, row.band_reason) == (2, "word_count:2")  # 2 words
+    # Every metric is stored, but there is no level for these task types.
+    assert (row.band, row.band_reason, row.word_count) == (None, "not_applicable", 2)
+    assert row.words_per_second is not None and row.compression_ratio is not None
     (empty,) = results(free)
-    assert (empty.band, empty.word_count, empty.compression_ratio) == (1, 0, None)
-    assert empty.band_reason == "word_count:1"
+    assert (empty.band, empty.band_reason, empty.word_count, empty.compression_ratio) == (None, "not_applicable", 0, None)
+    for rid in (image, free):
+        assert (recording(rid).qc_tier2, recording(rid).qc_final) == (None, "silver")
+
+
+def test_rescore_moves_spontaneous_clips_to_no_level(people: None, storage: LocalFileStorage) -> None:
+    # Scored under the earlier thresholds (every task type got a level) ...
+    image = clip(storage, task_type="image", prompt_text=None, transcript="Ndikuona ana awiri akusewera")
+    old = CONFIG.model_copy(deep=True)
+    old.thresholds_version, old.levelled_task_types = "2026-11-10-provisional", ["sentence", "image"]
+    old.levels["snr_db"].sets_level = True
+    run_scoring(db.get_sync_sessionmaker(), old, Filters(), storage=storage)
+    assert recording(image).qc_tier2 == 4
+    # ... the CER-only version leaves them without a level.
+    score(storage, rescore=True)
+    assert [(r.band, r.band_reason) for r in results(image)] == [(4, "all_ok"), (None, "not_applicable")]
+    assert (recording(image).qc_tier2, recording(image).qc_final) == (None, "silver")
+
+
+def test_band_is_empty_exactly_when_not_applicable(people: None, storage: LocalFileStorage) -> None:
+    rid = clip(storage)
+    tid = _transcript_id(rid)
+    for band, reason in ((None, "cer:2"), (3, "not_applicable"), (5, "cer:1")):
+        with pytest.raises(IntegrityError):
+            _insert(recording_id=rid, transcript_id=tid, band=band, band_reason=reason)
+    _insert(recording_id=rid, transcript_id=tid, band=None, band_reason="not_applicable")
 
 
 def test_qc_tier2_always_equals_the_latest_rows_band(people: None, storage: LocalFileStorage) -> None:
     rid = clip(storage)
     score(storage)
     strict = CONFIG.model_copy(deep=True)
-    strict.levels["snr_db"].bands[0].min = 200.0  # nothing reaches level 4 now
-    strict.levels["snr_db"].bands[1].min = 150.0
+    strict.levels["cer"].bands[0].max = -1.0  # nothing reaches level 4 now: CER 0.0 is level 3
     run_scoring(db.get_sync_sessionmaker(), strict, Filters(rescore=True), storage=storage)
     rows = results(rid)
-    assert [r.band for r in rows] == [4, 2] and recording(rid).qc_tier2 == 2
+    assert [r.band for r in rows] == [4, 3] and recording(rid).qc_tier2 == 3
 
 
 # =========
@@ -326,18 +358,29 @@ def test_the_migration_downgrade_removes_exactly_what_it_added(clean_db: None) -
             "recordings": {c["name"] for c in inspector.get_columns("recordings")},
             "checks": {c["name"] for c in inspector.get_check_constraints("recordings")},
             "transcript_uniques": {u["name"] for u in inspector.get_unique_constraints("transcripts")},
+            "routines": routines(),
         }
 
+    def routines() -> set[str]:
+        with db.get_sync_engine().connect() as conn:
+            functions = conn.execute(text("SELECT proname FROM pg_proc WHERE pronamespace = 'public'::regnamespace"))
+            triggers = conn.execute(text("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"))
+            return {row[0] for row in functions} | {row[0] for row in triggers}
+
     after = schema()
-    command.downgrade(Config("alembic.ini"), "f3a7c2d9e816")
+    command.downgrade(Config("alembic.ini"), "f3a7c2d9e816")  # tier 2 (two migrations) and tier 3
     try:
         before = schema()
     finally:
         command.upgrade(Config("alembic.ini"), "head")
-    assert after["tables"] - before["tables"] == {"qc_results"}
-    assert after["recordings"] - before["recordings"] == {"snr_db", "qc_tier2"}
-    assert after["checks"] - before["checks"] == {"ck_recordings_qc_tier2"}
+    assert after["tables"] - before["tables"] == {"qc_results", "qc_human_reviews"}
+    assert after["recordings"] - before["recordings"] == {"snr_db", "qc_tier2", "qc_tier3", "qc_tier3_reason", "qc_final"}
+    assert after["checks"] - before["checks"] == {"ck_recordings_qc_tier2", "ck_recordings_qc_tier3", "ck_recordings_qc_final"}
     assert after["transcript_uniques"] - before["transcript_uniques"] == {"uq_transcripts_id_recording_id"}
+    assert after["routines"] - before["routines"] == {
+        "qc_final_label", "recordings_set_qc_final", "qc_human_reviews_apply", "qc_human_reviews_append_only",
+        "trg_recordings_qc_final", "trg_qc_human_reviews_apply", "trg_qc_human_reviews_append_only",
+    }  # fmt: skip
     assert schema() == after
 
 
@@ -412,18 +455,26 @@ def test_script_report_and_sample(
         clip(storage, participant_id=person, prompt_id="S00001")
     clip(storage, prompt_id="S00002", transcript="kwathunthu kosiyana")
     clip(storage, task_type="image", prompt_text=None, transcript="Ndikuona ana awiri akusewera mpira pabwalo")
+    clip(storage, transcript=None)  # eligible, but not transcribed yet
 
     assert cli.main(["--dry-run"]) == 0
     assert results() == []
     assert cli.main([]) == 0
-    assert cli.main(["--report-only", "--sample", "2"]) == 0
+    report_file = tmp_path / "reports" / "tier2.txt"
+    assert cli.main(["--report-only", "--sample", "2", "--report-file", str(report_file)]) == 0
 
     out = capsys.readouterr().out
     assert "Clips per task type and level" in out and "S00002     median CER" in out
+    assert "still without a transcript (waiting for the ASR batch): 1" in out
+    image_row = next(line for line in out.splitlines() if line.strip().startswith("image"))
+    assert image_row.split()[1:5] == ["-", "-", "-", "-"] and "1 / " in image_row  # n/a, not levels
+    saved = report_file.read_text()
+    assert "Tier-2 report (stored results" in saved and "Listening sample" in saved and "Chisomo" not in saved
     assert "P0001" in out and "Chisomo" not in out and "kwathunthu" not in out and "+265" not in out
-    sample = (tmp_path / "qc" / "tier2-sample-2026-11-10-provisional.csv").read_text().splitlines()
+    sample = (tmp_path / "qc" / f"tier2-sample-{CONFIG.thresholds_version}.csv").read_text().splitlines()
     assert sample[0].startswith("recording_id,participant_id,task_type,prompt_id,level,band_reason")
-    assert len(sample) == 1 + 2 + 1 + 1  # sentence L4 (2 of 3), sentence L1, image L4
+    assert len(sample) == 1 + 2 + 1 + 1  # sentence L4 (2 of 3), sentence L1, image n/a
+    assert any(",image,," in line and ",n/a,not_applicable," in line for line in sample)
     assert "kwathunthu" not in "".join(sample)
 
 

@@ -15,6 +15,7 @@ import numpy as np
 from src.qc.scoring import REPORT_METRICS, ReportRow
 
 LEVELS = (1, 2, 3, 4)
+NA = "n/a"  # no level: task types tier 2 doesn't level (band_reason not_applicable)
 SAMPLE_SEED = 20261110
 SAMPLE_COLUMNS = (
     "recording_id", "participant_id", "task_type", "prompt_id", "level", "band_reason",
@@ -42,8 +43,10 @@ def _spread(values: list[float]) -> tuple[float, float, float] | None:
 # ======
 # REPORT
 # ======
-def render(rows: list[ReportRow], title: str) -> str:
+def render(rows: list[ReportRow], title: str, untranscribed: int | None = None) -> str:
     lines = [title]
+    if untranscribed is not None:
+        lines.append(f"  Eligible clips still without a transcript (waiting for the ASR batch): {untranscribed}")
     if not rows:
         return "\n".join([*lines, "  No scored clips."])
     by_type: dict[str, list[ReportRow]] = defaultdict(list)
@@ -53,21 +56,24 @@ def render(rows: list[ReportRow], title: str) -> str:
     lines.append(f"  {len(rows)} clips, {_minutes(rows):.1f} audio minutes")
 
     # Levels per task type
-    lines += ["", "Clips per task type and level (clips / minutes):"]
-    header = f"  {'task type':<22}" + "".join(f"{f'level {lvl}':>16}" for lvl in LEVELS) + f"{'total':>16}"
+    lines += ["", "Clips per task type and level (clips / minutes; n/a = no level for this task type):"]
+    header = f"  {'task type':<22}" + "".join(f"{f'level {lvl}':>16}" for lvl in LEVELS) + f"{'n/a':>16}{'total':>16}"
     lines.append(header)
     for task_type in [*types, "all"]:
         group = rows if task_type == "all" else by_type[task_type]
+        levelled = any(r.band is not None for r in group)
         cells = []
         for level in LEVELS:
             at = [r for r in group if r.band == level]
-            cells.append(f"{len(at)} / {_minutes(at):.1f}")
+            cells.append(f"{len(at)} / {_minutes(at):.1f}" if levelled else "-")
+        unlevelled = [r for r in group if r.band is None]
+        cells.append(f"{len(unlevelled)} / {_minutes(unlevelled):.1f}" if unlevelled else "-")
         cells.append(f"{len(group)} / {_minutes(group):.1f}")
         lines.append(f"  {task_type:<22}" + "".join(f"{c:>16}" for c in cells))
 
     # Reasons
     lines += ["", "Most common reasons (below level 4):"]
-    reasons = Counter(r.band_reason for r in rows if r.band < 4)
+    reasons = Counter(r.band_reason for r in rows if r.band is not None and r.band < 4)
     lines += [f"  {count:>5}  {reason}" for reason, count in reasons.most_common(10)] or ["  none"]
 
     # Metric distributions
@@ -101,10 +107,11 @@ def render(rows: list[ReportRow], title: str) -> str:
     by_person: dict[str, list[ReportRow]] = defaultdict(list)
     for row in rows:
         by_person[row.participant_id].append(row)
-    lines.append(f"  {'participant':<12}" + "".join(f"{f'L{lvl}':>6}" for lvl in LEVELS) + f"{'CER':>8}")
+    lines.append(f"  {'participant':<12}" + "".join(f"{f'L{lvl}':>6}" for lvl in LEVELS) + f"{NA:>6}{'CER':>8}")
     for person in sorted(by_person):
         group = by_person[person]
         counts = "".join(f"{sum(r.band == lvl for r in group):>6}" for lvl in LEVELS)
+        counts += f"{sum(r.band is None for r in group):>6}"
         cers = [r.metrics["cer"] for r in group if r.task_type == "sentence" and r.metrics.get("cer") is not None]
         lines.append(f"  {person:<12}{counts}{_fmt(statistics.median(cers) if cers else None):>8}")
     return "\n".join(lines)
@@ -114,11 +121,12 @@ def render(rows: list[ReportRow], title: str) -> str:
 # SAMPLE
 # ======
 def write_sample(rows: list[ReportRow], per_group: int, path: Path, seed: int = SAMPLE_SEED) -> int:
-    """Up to per_group recordings per task type and level, at random (fixed seed), for
-    listening. wav_path is relative to the audio folder (data/audio). Returns rows written."""
+    """Up to per_group recordings per task type and level (n/a for task types without a level),
+    at random (fixed seed), for listening. wav_path is relative to the audio folder (data/audio).
+    Returns rows written."""
     groups: dict[tuple[str, int], list[ReportRow]] = defaultdict(list)
     for row in sorted(rows, key=lambda r: r.recording_id):
-        groups[(row.task_type, row.band)].append(row)
+        groups[(row.task_type, 0 if row.band is None else row.band)].append(row)  # 0 sorts n/a first
     rng = random.Random(seed)
     chosen: list[ReportRow] = []
     for key in sorted(groups):
@@ -131,7 +139,8 @@ def write_sample(rows: list[ReportRow], per_group: int, path: Path, seed: int = 
         for r in chosen:
             mt = r.metrics
             writer.writerow([
-                r.recording_id, r.participant_id, r.task_type, r.prompt_id or "", r.band, r.band_reason,
+                r.recording_id, r.participant_id, r.task_type, r.prompt_id or "", NA if r.band is None else r.band,
+                r.band_reason,
                 *(_csv(mt.get(name)) for name in SAMPLE_COLUMNS[6:-1]),
                 r.wav_path or "",
             ])  # fmt: skip

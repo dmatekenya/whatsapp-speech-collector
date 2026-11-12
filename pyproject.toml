@@ -26,7 +26,7 @@ dependencies = [
     "asyncpg>=0.32.0",
     "fastapi>=0.143.2",
     "httpx>=0.28.1",
-    "jiwer==3.0.5",
+    "jiwer==4.0.0",
     "modal>=1.6.3,<2",
     "numpy>=2.5.4",
     "phonenumbers>=9.0.41",

@@ -1,0 +1,23 @@
+/* Scoped Masakhane admin overview charts, cannot modify other QC elements. */
+#masakhane-dashboard-demographics.mdemo-v8{box-sizing:border-box;margin:18px 0 24px;padding:18px;border:1px solid #dfe5f1;border-radius:14px;background:#fff;box-shadow:0 6px 19px rgba(20,32,63,.035);width:100%;min-width:0}
+#masakhane-dashboard-demographics *{box-sizing:border-box}
+#masakhane-dashboard-demographics .mdemo-v8-header{margin-bottom:14px}
+#masakhane-dashboard-demographics .mdemo-v8-kicker{font-size:10px;font-weight:800;letter-spacing:1.4px;color:#665af2;margin:0 0 6px}
+#masakhane-dashboard-demographics .mdemo-v8-title{font-size:19px;font-weight:750;color:#15233c;line-height:1.3;margin:0}
+#masakhane-dashboard-demographics .mdemo-v8-subtitle{font-size:12px;color:#68778d;margin:7px 0 0}
+#masakhane-dashboard-demographics .mdemo-v8-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+#masakhane-dashboard-demographics .mdemo-v8-card{padding:13px;border:1px solid #e5e9f2;background:#fff;border-radius:11px;min-width:0}
+#masakhane-dashboard-demographics .mdemo-v8-card-title{font-size:13px;font-weight:750;color:#17243c;margin:0 0 10px}
+#masakhane-dashboard-demographics .mdemo-v8-small{font-size:10px;color:#738197;margin:-2px 0 8px}
+#masakhane-dashboard-demographics .mdemo-v8-donut{margin:13px auto 17px;width:min(140px,90%);aspect-ratio:1;border-radius:50%;display:grid;place-items:center}
+#masakhane-dashboard-demographics .mdemo-v8-middle{width:72%;height:72%;border-radius:50%;background:#fff;display:flex;flex-direction:column;justify-content:center;align-items:center}
+#masakhane-dashboard-demographics .mdemo-v8-middle strong{font-size:17px;color:#15253c;font-weight:800}
+#masakhane-dashboard-demographics .mdemo-v8-middle small{font-size:10px;color:#68778d}
+#masakhane-dashboard-demographics .mdemo-v8-legend{border-top:1px solid #edf0f6;padding-top:7px}
+#masakhane-dashboard-demographics .mdemo-v8-line{display:grid;grid-template-columns:7px minmax(0,1fr) auto;gap:6px;align-items:center;padding:7px 0;border-bottom:1px solid #f2f4f8}
+#masakhane-dashboard-demographics .mdemo-v8-swatch{height:7px;width:7px;border-radius:50%}
+#masakhane-dashboard-demographics .mdemo-v8-name{font-size:10px;color:#546179;overflow-wrap:anywhere}
+#masakhane-dashboard-demographics .mdemo-v8-number{font-size:10px;font-weight:700;white-space:nowrap;color:#22324b}
+#masakhane-dashboard-demographics .mdemo-v8-info{font-size:12px;color:#66758c;padding:14px 0;margin:0}
+@media(max-width:1150px){#masakhane-dashboard-demographics .mdemo-v8-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){#masakhane-dashboard-demographics.mdemo-v8{padding:12px}#masakhane-dashboard-demographics .mdemo-v8-grid{grid-template-columns:1fr}}

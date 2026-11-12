@@ -1,0 +1,42 @@
+# Private Hostinger runtime settings / credentials
+/private/config.php
+/private/qc_review_token.php
+/private/*.env
+/private/.env*
+/private/profile_images/
+/private/*.json
+/private/*.log
+/.env
+/.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+# User/private data and generated files
+/data/
+/recordings/
+/uploads/
+/storage/
+/backups/
+*.sql
+*.sqlite
+*.db
+*.xlsx
+*.csv
+*.zip
+*.tar.gz
+*.log
+/error_log
+/.idea/
+/.vscode/
+/.Rproj.user/
+__pycache__/
+.DS_Store
+# Local or tool-generated deployment files
+/index.php.demographics-*
+/app/pages.php.demographics-*
+/install-*.php
+/install-*.sh
+/rollback-*.sh

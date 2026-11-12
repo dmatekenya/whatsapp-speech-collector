@@ -17,7 +17,7 @@ function post_action(string $page,array $u): never {
   if(empty($_POST['listened'])){notify('error','Confirm that you listened to this recording.');redirect('voice',['id'=>$id]);}
   $notes=trim((string)($_POST['notes']??''));
   $reason=(string)($_POST['reason_code']??'');
-  $reasons=['wrong_sentence','noise','not_own_voice','unclear','not_chichewa','other'];
+  $reasons=['wrong_sentence','no_speech','noise','not_own_voice','unclear','not_chichewa','other'];
   if(strlen($notes)>500||($decision==='flag'&&strlen($notes)<5)){
    notify('error','Online notes must contain 5–500 characters; optional QC comments must be at most 500.');redirect('voice',['id'=>$id]);
   }

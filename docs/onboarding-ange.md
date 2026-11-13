@@ -6,7 +6,7 @@ The project collects about 500 hours of Chichewa speech through a WhatsApp bot (
 build an open speech-recognition dataset, funded through Masakhane. A 3-day pilot with 16
 contributors ran from 9 November 2026; the main collection follows in weekly rounds. This page
 explains the whole project and what to read. The audio-quality experiments have their own handover:
-[audio-quality/handover.md](audio-quality/handover.md).
+[audio-quality/handover.md](speech-recordings/audio-quality/handover.md).
 
 ## Reading list, in order
 
@@ -15,13 +15,13 @@ All in this repo, branch `main`. About a day of reading.
 | # | Read | Why |
 | --- | --- | --- |
 | 1 | `README.md` and `CLAUDE.md` | What the repo is, and the working rules (also followed by Claude Code) |
-| 2 | `docs/methodology.md`: Overview, then sections 1–7 | The design: participants, WhatsApp channel, task types, sessions, targets, audio handling |
-| 3 | `docs/methodology.md` section 8 | The quality-control protocol: three tiers and the final label (Bronze, Silver, Gold, Rejected) |
-| 4 | `docs/methodology.md` section 10 (decision log) | Why things are the way they are, in date order |
-| 5 | `docs/architecture/database.md` | Every table and column, and how they connect |
-| 6 | `docs/deploy.md` | How the server is run: imports, deploys, the ASR batch, tier-2 scoring |
-| 7 | `docs/plans/supervision-dashboard-plan.md` and `docs/plans/supervision-qc-contract.md` | The supervisors' review dashboard (built by Stewart) and how it writes decisions |
-| 8 | `docs/plans/meta-cloud-api-migration-plan.md` | Optional: why and how we moved from Twilio to Meta's WhatsApp Cloud API |
+| 2 | `docs/methodology.md` and the component methodologies | The design: participants, WhatsApp channel, task types, sessions, targets, audio handling |
+| 3 | `docs/speech-recordings/quality-assurance.md` | The quality-control protocol: three tiers and the final label (Bronze, Silver, Gold, Rejected) |
+| 4 | `docs/decisions.md` | Why things are the way they are, in date order |
+| 5 | `docs/platform/database.md` | Every table and column, and how they connect |
+| 6 | `docs/platform/deployment.md` | How the server is run: imports, deploys, the ASR batch, tier-2 scoring |
+| 7 | `docs/platform/plans/supervision-dashboard-plan.md` and `docs/platform/plans/supervision-qc-contract.md` | The supervisors' review dashboard (built by Stewart) and how it writes decisions |
+| 8 | `docs/platform/plans/meta-cloud-api-migration-plan.md` | Optional: why and how we moved from Twilio to Meta's WhatsApp Cloud API |
 
 Code to skim after the docs: `src/conversation/` (the bot), `src/asr/` and
 `scripts/modal_asr_app.py` (transcription), `src/qc/` with `config/qc_tier2.yaml` and
@@ -70,7 +70,7 @@ then NLP/AI work on the data).
 The automatic checks can tell whether a sentence was read correctly, but not yet whether a recording
 is noisy, distant or muffled. The audio-quality experiments build a labelled audio-quality set
 (staged recordings plus pilot clips, rated by three people) and use it to calibrate those checks.
-See [audio-quality/handover.md](audio-quality/handover.md), which links to the recording guide and
+See [audio-quality/handover.md](speech-recordings/audio-quality/handover.md), which links to the recording guide and
 the labelling plan.
 
 ## Rules for working with the data and the repo

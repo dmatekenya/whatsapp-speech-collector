@@ -1,6 +1,17 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
+  - repo: local
+    hooks:
+      - id: documentation-book
+        name: Build documentation book
+        entry: jupyter-book build docs --all --warningiserror --keep-going
+        language: python
+        additional_dependencies:
+          - jupyter-book==1.0.4.post1
+          - sphinxcontrib-mermaid==1.2.3
+        files: ^docs/
+        pass_filenames: false
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:

@@ -153,7 +153,7 @@ def test_a_rejected_template_is_a_permanent_error(code: int) -> None:
 
 def test_the_real_config_loads() -> None:
     welcome = load_welcome_config()
-    assert (welcome.template, welcome.language, welcome.send_on_import) == ("registration_welcome", "en", False)
+    assert (welcome.template, welcome.language, welcome.send_on_import) == ("registration_welcome", "en", True)
     assert welcome.purpose == "template:registration_welcome"
 
 
@@ -358,8 +358,8 @@ def test_import_send_welcome_sends_to_new_participants_only(
     monkeypatch.setattr("src.registry.welcome.get_channel", lambda name=None: channel)
     path = write_people(tmp_path, [["Alice Banda", "+265 888 72 15 91", "false"], ["Tess Tester", "0999 123 456", "true"]])
 
-    # Default (send_on_import: false) and a dry run: nothing sent.
-    for argv in ([str(path), "--dry-run", "--send-welcome"], [str(path)]):
+    # A dry run and an explicit opt-out send nothing.
+    for argv in ([str(path), "--dry-run"], [str(path), "--no-send-welcome"]):
         with pytest.raises(SystemExit) as done:
             main(argv)
         assert done.value.code == 0
@@ -367,12 +367,12 @@ def test_import_send_welcome_sends_to_new_participants_only(
 
     # The participants already exist now: a second import has no new ones to welcome.
     with pytest.raises(SystemExit) as done:
-        main([str(path), "--send-welcome"])
+        main([str(path)])
     assert done.value.code == 0 and channel.templates == []
 
     # New participants get it; the test participant is skipped.
     more = write_people(tmp_path, [["Ben Phiri", "0888 111 222", "false"], ["Tina Test", "0999 222 333", "true"]])
     with pytest.raises(SystemExit) as done:
-        main([str(more), "--send-welcome"])
+        main([str(more)])
     assert done.value.code == 0
     assert [(to, params) for to, _, _, params in channel.templates] == [("+265888111222", ["Ben", "20"])]

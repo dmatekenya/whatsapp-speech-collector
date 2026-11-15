@@ -7,6 +7,10 @@ decide, write the new state and the reply's outbound_messages rows, commit.
 The send_outbound job then sends them. Re-running a turn whose reply exists
 just returns that reply's pending rows, so a retried job never replies twice.
 
+Tier 1 ends in the turn: the turn's clip leaves it accepted, needs_review or
+rejected (finish_arrival_checks), so a clip still 'pending' is one whose turn
+never finished.
+
 States: idle | awaiting_ready | in_session | awaiting_continue | awaiting_stop_confirm.
 
 After a gap longer than fresh_start_after_hours since the participant's previous
@@ -45,6 +49,7 @@ from src.conversation.states import (  # noqa: F401 - STATES is re-exported
 from src.conversation.messages import Catalog, Rendered, get_catalog
 from src.conversation.outbound import PromptPart, Reply, emit
 from src.logging_config import mask_phone
+from src.storage.audio import apply_audio_origin, apply_length_flag
 from src.storage.db import get_sync_sessionmaker
 from src.storage.models import (
     Assignment,
@@ -108,6 +113,27 @@ def _minutes(value: float) -> str:
     return f"{value:.1f}"
 
 
+def finish_arrival_checks(recording: Recording | None) -> None:
+    """End tier 1 for this turn's clip, on every path: a duplicate is rejected (unless already
+    rejected for another reason); a clip still pending passed the arrival checks, so it is
+    accepted. needs_review and rejected are left as they are. After this only a clip whose
+    turn never finished (the engine failed; the job is retried) is still pending."""
+    if recording is None or recording.status != "stored":
+        return
+    if recording.duplicate_of_recording_id is not None and recording.qc_status != "rejected":
+        recording.qc_status, recording.qc_reason = "rejected", "duplicate"
+    elif recording.qc_status == "pending":
+        recording.qc_status, recording.qc_reason = "accepted", None
+
+
+def length_text(seconds: float) -> str:
+    """A clip limit as participants read it: "45 seconds", "1 minute", "2 minutes"."""
+    if seconds >= 60 and seconds % 60 == 0:
+        minutes = int(seconds // 60)
+        return f"{minutes} minute" + ("" if minutes == 1 else "s")
+    return f"{seconds:g} seconds"
+
+
 @dataclass
 class Turn:
     db: Session
@@ -169,8 +195,8 @@ class Engine:
             # Always the sum of the per-type targets.
             "total_target": _minutes(self.config.total(targets)),
             "session_size": self.config.session_size,
-            "min_seconds": f"{self.config.clip_seconds.min:g}",
-            "max_seconds": f"{self.config.clip_seconds.max:g}",
+            "min_seconds": f"{self.config.clip_limits.min_seconds:g}",
+            **self._length_values(None),
             "support_contact": get_settings().support_contact,
         }
         for task_type in types:
@@ -178,6 +204,15 @@ class Engine:
             values[f"{task_type}_target"] = _minutes(targets.get(task_type, 0.0))
         values.update(extra)
         return values
+
+    def _length_values(self, task_type: str | None, origin: str | None = None) -> dict[str, str]:
+        """max_length: the limit for this task type and origin; max_length_older: for an
+        older voice note or audio file (forwarded / uploaded) in this task type."""
+        limits = self.config.clip_limits
+        return {
+            "max_length": length_text(limits.max_seconds(task_type, origin)),
+            "max_length_older": length_text(limits.max_seconds(task_type, "forwarded")),
+        }
 
     def task_name(self, task_type: str) -> str:
         """Lowercase, for use mid-sentence ("Next up: *reading sentences*")."""
@@ -225,7 +260,8 @@ class Engine:
         parts = []
         for key in ("general", task_type):
             if key and (force or not seen.get(key)):
-                parts.append(self.r(f"instructions.{key}", **self._values(turn.participant)))
+                lengths = self._length_values(task_type) if key == task_type else {}
+                parts.append(self.r(f"instructions.{key}", **self._values(turn.participant, **lengths)))
                 seen[key] = True
         if parts:
             parts.append(self.r("instructions.reminder"))
@@ -404,24 +440,27 @@ class Engine:
     # AUDIO IN A SESSION
     # ==================
 
-    def _origin_rejected(self, turn: Turn) -> bool:
-        """config audio_origin rejects this voice note (e.g. forwarded)."""
+    def _apply_task_rules(self, turn: Turn, assignment: Assignment) -> bool:
+        """Apply config audio_origin and the length flag for the task type this clip
+        answers (the worker could only apply the defaults). True if the origin rule
+        rejects it (e.g. forwarded or uploaded, except in free_speech)."""
         recording = turn.recording
-        return (
-            recording is not None
-            and recording.status == "stored"
-            and self.config.audio_origin.policy(recording.audio_origin) == "reject"
-        )
+        if recording is None or recording.status != "stored":
+            return False
+        apply_audio_origin(recording, recording.audio_origin, assignment.prompt_type, self.config)
+        apply_length_flag(recording, assignment.prompt_type, self.config)
+        return self.config.audio_policy(recording.audio_origin, assignment.prompt_type) == "reject"
 
-    def _problem(self, recording: Recording | None) -> str | None:
+    def _problem(self, recording: Recording | None, task_type: str) -> str | None:
         duration = recording.duration_s if recording is not None else None
         if recording is None or recording.status != "stored" or not duration or duration < EMPTY_AUDIO_SECONDS:
             return "empty_audio"
         if recording.duplicate_of_recording_id is not None:
             return "duplicate"
-        if duration < self.config.clip_seconds.min:
+        limits = self.config.clip_limits
+        if duration < limits.min_seconds:
             return "too_short"
-        if duration > self.config.clip_seconds.max:
+        if duration > limits.max_seconds(task_type, recording.audio_origin):
             return "too_long"
         if self.config.clip_checks.problem(recording.active_seconds, duration) == "no_speech":
             return "no_speech"
@@ -429,10 +468,10 @@ class Engine:
 
     def _flag_low_speech(self, recording: Recording) -> None:
         """Accepted, but mostly silence: marked for review. A clip already flagged
-        (e.g. speaker_check_pending for an uploaded file) keeps its reason."""
+        (e.g. speaker_check_pending for a forwarded or uploaded clip in free speech) keeps its reason."""
         if (
             self.config.clip_checks.problem(recording.active_seconds, recording.duration_s) == "low_speech"
-            and recording.qc_status == "pending"
+            and recording.qc_status in ("pending", "accepted")
         ):
             recording.qc_status, recording.qc_reason = "needs_review", "low_speech"
 
@@ -448,15 +487,18 @@ class Engine:
                 end_session(self.db, stale.id, "abandoned", self.now)
             return self.offer(turn)
 
-        if self._origin_rejected(turn):
-            # Forwarded: never used. The prompt stays open, and it doesn't use up a retake.
+        if self._apply_task_rules(turn, assignment):
+            # e.g. forwarded or uploaded: never used. The prompt stays open, and it
+            # doesn't use up a retake. The reply says which ("forwarded" would be wrong for a file).
             record_failed_attempt(self.db, assignment.id, turn.recording.id, "not_recorded")
-            return self.repeat_prompt(turn, assignment, self.r("problems.not_recorded"))
+            key = "problems.uploaded_audio_file" if turn.recording.audio_origin == "uploaded" else "problems.not_recorded"
+            return self.repeat_prompt(turn, assignment, self.r(key))
 
-        problem = self._problem(turn.recording)
+        problem = self._problem(turn.recording, assignment.prompt_type)
         values = self._values(
             turn.participant,
             duration=f"{(turn.recording.duration_s or 0) if turn.recording else 0:.0f}",
+            **self._length_values(assignment.prompt_type, turn.recording.audio_origin if turn.recording else None),
         )
         if problem == "duplicate":
             return self.repeat_prompt(turn, assignment, self.r("problems.duplicate", **values))
@@ -584,7 +626,7 @@ class Engine:
             return Reply(parts=[self.r(problem, **self._values(turn.participant, duration="0"))])
 
         # idle: anything starts the conversation (audio is kept as an unassigned
-        # recording; a forwarded one is already marked rejected by the worker).
+        # recording; the worker has applied the global audio_origin rule to it).
         return self.offer(turn)
 
 
@@ -659,6 +701,7 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
 
         participant = db.scalar(select(Participant).where(Participant.phone_number == message.sender))
         participant_id = participant.participant_id if participant else None
+        recording = db.scalar(select(Recording).where(Recording.inbound_message_id == message.id))
         if participant is None:
             reply = _unregistered_reply(db, message, catalog, now)
         elif participant.status == "withdrawn":
@@ -668,7 +711,6 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
         elif participant.status != "active":
             reply = Reply(parts=[catalog.render("participant.paused")])
         else:
-            recording = db.scalar(select(Recording).where(Recording.inbound_message_id == message.id))
             state = _state_for(db, participant_id)
             before = _snapshot(state)
             turn = Turn(db, message, participant, state, recording, now, _previous_inbound_at(db, message))
@@ -682,6 +724,7 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
                 message.id,
                 state.state,
             )
+        finish_arrival_checks(recording)
 
         if reply is None:
             db.commit()

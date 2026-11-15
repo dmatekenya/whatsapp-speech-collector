@@ -11,7 +11,8 @@ class Transcriber(Protocol):
         """One result per chunk, in the order given; a failed call yields its exception.
 
         A result is {"model": {"key", "repo", "revision"}, "gpu": str,
-        "clips": [{"recording_id", "text", "avg_logprob", "audio_seconds", "error"}]}.
+        "clips": [{"recording_id", "text", "avg_logprob", "audio_seconds", "long_form", "error"}]}.
+        long_form: whether the clip (over 30 s) went through long-form decoding.
         """
         ...
 

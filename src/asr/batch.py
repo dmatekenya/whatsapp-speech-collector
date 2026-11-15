@@ -1,7 +1,7 @@
 """The ASR batch: select recordings, send them to Modal in chunks, store the transcripts.
 
-Step 1 of 2: transcripts only. Step 2 (scoring against the prompt text, QC
-results and the report) runs after a batch, from after_batch() below.
+Step 1 of 2: transcripts. Step 2, tier-2 scoring (src/qc), runs after each
+batch for the recordings it transcribed, from after_batch() below.
 """
 
 import json
@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 # qc_reason of clips the arrival checks rejected: never worth transcribing.
 ARRIVAL_REJECTIONS = ("empty", "too_short", "too_long", "no_speech", "not_recorded")
+# Clips longer than Whisper's 30 s window need the Modal app's long-form decoding. A result for
+# such a clip that doesn't say long_form: true came from an app deployed before it had long-form
+# (and was cut at 30 s): it isn't stored, so the clip is retried once the app is redeployed.
+LONG_FORM_SECONDS = 30.0
 LOCK_KEY = "asr_batch"
 ERROR_LIMIT = 2000
 
@@ -96,7 +100,8 @@ def _local_midnight(day: date, tz: ZoneInfo) -> datetime:
 def select_clips(db: Session, filters: Filters, storage: FileStorage, tz: ZoneInfo) -> Selection:
     """Stored recordings of registered participants with a WAV, oldest first, minus:
     clips rejected at arrival, duplicates, test participants (unless
-    include_test), ones this model has transcribed (unless force) and missing files.
+    include_test), ones this model has transcribed (unless force) and missing
+    files.
     --since/--until are local dates (tz) of when the recording was stored.
     """
     query = (
@@ -246,8 +251,21 @@ def ran_in_slot(db: Session, slot_start: datetime) -> bool:
 
 
 def after_batch(session_factory: sessionmaker[Session], batch_id: int) -> None:
-    """Hook for step 2: score the new transcripts against the prompt text (CER/WER),
-    suggest bands, write qc_results and the report. Nothing yet."""
+    """Step 2: tier-2 scoring of the recordings this batch transcribed (src/qc/scoring.py).
+
+    A scoring error never fails the ASR batch: it is logged and the clips stay
+    unscored, so the next run (or scripts/score_tier2.py) picks them up.
+    """
+    try:
+        from src.qc.scoring import score_after_batch
+
+        score_after_batch(session_factory, batch_id)
+    except Exception as exc:  # noqa: BLE001 - the transcripts are stored; scoring can wait
+        logger.error(
+            "Batch %s: tier-2 scoring failed (%s); the clips stay unscored until the next run",
+            batch_id,
+            type(exc).__name__,
+        )
 
 
 def _payloads(chunks: list[list[Clip]], unreadable: dict[int, str]) -> Iterator[Chunk]:
@@ -341,6 +359,7 @@ def run_batch(
                     continue
                 chunk = chunks[number - 1]
                 ids = [c.recording_id for c in chunk]
+                durations = {c.recording_id: c.duration_s for c in chunk}
                 line: dict[str, Any] = {"batch_id": batch_id, "chunk": number, "recording_ids": ids}
                 transcripts: list[Transcript] = []
                 chunk_failed: list[int] = []
@@ -358,9 +377,15 @@ def run_batch(
                     model = model or result["model"]
                     gpu = gpu or result.get("gpu")
                     by_id = {clip.get("recording_id"): clip for clip in result.get("clips", [])}
+                    cut_off: list[int] = []
                     for recording_id in ids:
                         clip = by_id.get(recording_id)
                         if clip is None or clip.get("error") or clip.get("text") is None:
+                            chunk_failed.append(recording_id)
+                            continue
+                        long_form = clip.get("long_form")
+                        if durations[recording_id] > LONG_FORM_SECONDS and long_form is not True:
+                            cut_off.append(recording_id)
                             chunk_failed.append(recording_id)
                             continue
                         logprob = clip.get("avg_logprob")
@@ -373,10 +398,18 @@ def run_batch(
                                 model_revision=result["model"].get("revision"),
                                 text=clip["text"],
                                 avg_logprob=logprob if isinstance(logprob, int | float) and math.isfinite(logprob) else None,
+                                long_form=long_form if isinstance(long_form, bool) else None,
                                 batch_id=batch_id,
                             )
                         )
                         totals["audio_seconds"] += float(clip.get("audio_seconds") or 0)
+                    if cut_off:
+                        line["not_long_form"] = cut_off
+                        logger.warning(
+                            "Batch %s chunk %s: recording ids %s are over 30 s but the Modal app didn't use"
+                            " long-form decoding; not stored. Redeploy scripts/modal_asr_app.py",
+                            batch_id, number, cut_off,
+                        )  # fmt: skip
                     if chunk_failed:
                         logger.warning("Batch %s chunk %s: no transcript for recording ids %s", batch_id, number, chunk_failed)
                 if unreadable:

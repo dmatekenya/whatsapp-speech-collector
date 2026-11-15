@@ -1,0 +1,101 @@
+{
+ "source": "scripts/modal_asr_compare.py::normalize_transcript (copy of src/data_utils/text_utils.py in the training repo), generated 2026-11-10",
+ "pairs": [
+  {
+   "input": "Moni, muli bwanji?",
+   "output": "moni muli bwanji"
+  },
+  {
+   "input": "MONI! Muli BWANJI lero?",
+   "output": "moni muli bwanji lero"
+  },
+  {
+   "input": "Ndili bwino; kaya inu?",
+   "output": "ndili bwino kaya inu"
+  },
+  {
+   "input": "Kodi n’chifukwa chiyani anthu ambiri amaona kuti maphunziro ndi ofunika?",
+   "output": "kodi n'chifukwa chiyani anthu ambiri amaona kuti maphunziro ndi ofunika"
+  },
+  {
+   "input": "Kodi n‘chifukwa chiyani? N`chifukwa ´chiyani? Nʼchifukwa nʻchifukwa",
+   "output": "kodi n'chifukwa chiyani n'chifukwa 'chiyani n'chifukwa n'chifukwa"
+  },
+  {
+   "input": "ng'ombe  zamkaka   ndi\tzamphongo",
+   "output": "ng'ombe zamkaka ndi zamphongo"
+  },
+  {
+   "input": "  leading and trailing spaces  ",
+   "output": "leading and trailing spaces"
+  },
+  {
+   "input": "Line one\nline two\r\nline three\rline four",
+   "output": "line one line two line three line four"
+  },
+  {
+   "input": "Anapita ku msika [noise] ndipo (inaudible) anabwera.",
+   "output": "anapita ku msika ndipo anabwera"
+  },
+  {
+   "input": "Ndalama zokwana 5,000 kwacha pa 2 days, 50% yokha.",
+   "output": "ndalama zokwana 5000 kwacha pa 2 days 50 yokha"
+  },
+  {
+   "input": "Mu 2018 pa 30 June; 1st & 2nd year.",
+   "output": "mu 2018 pa 30 june 1st 2nd year"
+  },
+  {
+   "input": "Anapanga download instrumental pa internet ndipanga record basi.",
+   "output": "anapanga download instrumental pa internet ndipanga record basi"
+  },
+  {
+   "input": "Okay ndubwera sorry, taona mochedwa... uh",
+   "output": "okay ndubwera sorry taona mochedwa uh"
+  },
+  {
+   "input": "“Ndimakukonda,” anatero. ‘Inde’ — kapena ayi?",
+   "output": "ndimakukonda anatero 'inde' kapena ayi"
+  },
+  {
+   "input": "Chichewa—Chitumbuka–Chiyao: zilankhulo za ku Malawi!",
+   "output": "chichewachitumbukachiyao zilankhulo za ku malawi"
+  },
+  {
+   "input": "HIV ndi EDZI; DMPA ndi BCG.",
+   "output": "hiv ndi edzi dmpa ndi bcg"
+  },
+  {
+   "input": "Àlẹ́ ndi café naïve",
+   "output": "àlẹ́ ndi café naïve"
+  },
+  {
+   "input": "ma-WhatsApp, e-mail & co.",
+   "output": "mawhatsapp email co"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "   ",
+   "output": ""
+  },
+  {
+   "input": "?!.,;:",
+   "output": ""
+  },
+  {
+   "input": "Mwaswera bwanji?Mwaswera bwanji?",
+   "output": "mwaswera bwanjimwaswera bwanji"
+  },
+  {
+   "input": "Zikomo kwambiri�",
+   "output": "zikomo kwambiri'"
+  },
+  {
+   "input": "ndi'",
+   "output": "ndi'"
+  }
+ ]
+}

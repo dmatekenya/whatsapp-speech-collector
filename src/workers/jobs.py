@@ -22,6 +22,7 @@ from src.registry.participants import find_active_participant
 from src.storage.audio import (
     AudioStorage,
     apply_audio_origin,
+    apply_length_flag,
     extension_for,
     get_audio_storage,
     recording_filename,
@@ -139,12 +140,13 @@ def _store_recording(
     recording.is_voice_note = inbound.is_voice_note
     recording.forwarded = inbound.forwarded
     apply_audio_origin(recording, audio_origin(inbound))
+    apply_length_flag(recording)  # default limits; the engine redoes it per task type
     recording.status = "stored"
     recording.error = None
     session.flush()
-    # Only flagged for now; rejection and a reply come with the QC and
-    # conversation steps. If this message arrived before copies that were
-    # stored earlier, they get re-pointed at this recording.
+    # Only flagged here; the conversation engine rejects the duplicate (qc_reason duplicate). If
+    # this message arrived before copies that were stored earlier, they get re-pointed at this
+    # recording.
     changes = relink_duplicates(session, content_sha256)
     session.commit()
     for change in changes:

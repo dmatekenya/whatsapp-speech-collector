@@ -151,7 +151,9 @@ def _run_session(
         if rng.random() >= behaviour.answer:
             continue  # ignored: it expires later
         counter["recording"] += 1
-        seconds = rng.uniform(config.clip_seconds.min, config.clip_seconds.max)
+        # Typical clips: from the minimum up to the long-clip flag (longer ones are allowed).
+        limits = config.clip_limits
+        seconds = rng.uniform(limits.min_seconds, limits.default.flag_over)
         recording_id = _fake_recording(sim, participant_id, seconds, counter["recording"])
         result = handle_response(sim, assignment.id, recording_id, now, config)
         # QC comes later in reality; a rejection lowers minutes again, and the

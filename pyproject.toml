@@ -26,7 +26,9 @@ dependencies = [
     "asyncpg>=0.32.0",
     "fastapi>=0.143.2",
     "httpx>=0.28.1",
+    "jiwer==3.0.5",
     "modal>=1.6.3,<2",
+    "numpy>=2.5.4",
     "phonenumbers>=9.0.41",
     "pillow>=13.0.0",
     "psycopg[binary]>=3.3.6",
@@ -42,8 +44,8 @@ dependencies = [
 ]
 [project.optional-dependencies]
 docs = [
-	"docutils==0.17.1", # pinned to docutils==0.17.1 due to https://github.com/worldbank/template/issues/60. See also: https://jupyterbook.org/en/stable/content/citations.html?highlight=docutils#citations-and-bibliographies
-	"jupyter-book>=1,<2",
+	"jupyter-book==1.0.4.post1",
+	"sphinxcontrib-mermaid==1.2.3",
 ]
 
 [tool.codespell]

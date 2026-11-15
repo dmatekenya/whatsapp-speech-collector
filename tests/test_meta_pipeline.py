@@ -100,7 +100,7 @@ def config() -> CollectionConfig:
             "max_retakes_per_prompt": 2,
             "targets_minutes": {"per_participant": 30, "split": {"sentence": 1 / 3, "image": 1 / 3, "conversation_starter": 1 / 3}},
             # The test audio is 2 seconds long.
-            "clip_seconds": {"min": 1, "max": 30},
+            "clip_limits": {"min_seconds": 1, "default": {"flag_over": 30, "max": 30}},
         }
     )
 
@@ -275,7 +275,7 @@ def test_meta_voice_note_is_stored_and_flagged(client: TestClient, channels: Cha
     (recording,) = recordings()
     assert recording.status == "stored" and recording.original_path.endswith(".ogg")
     assert recording.is_voice_note is True and recording.forwarded == "no"
-    assert recording.audio_origin == "recorded" and recording.qc_status == "pending"
+    assert recording.audio_origin == "recorded" and recording.qc_status == "accepted"
     assert recording.provider_media_deleted is False
     assert channels.meta.downloads == 1 and channels.meta.deletes == 0
     assert channels.twilio.downloads == 0 and channels.twilio.sent == []
@@ -293,11 +293,12 @@ def test_forwarded_audio_file_is_flagged(client: TestClient, channels: Channels)
     assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
 
 
-def test_uploaded_audio_file_is_flagged_for_review(client: TestClient, channels: Channels) -> None:
+def test_uploaded_audio_file_outside_a_session_is_rejected(client: TestClient, channels: Channels) -> None:
     from_meta(client, mp.audio_file(WA_ID))
     (recording,) = recordings()
     assert recording.audio_origin == "uploaded" and recording.original_content_type == "audio/mpeg"
-    assert (recording.qc_status, recording.qc_reason) == ("needs_review", "speaker_check_pending")
+    # Not yet matched to a prompt: the global rule (accepted only in free speech).
+    assert (recording.qc_status, recording.qc_reason) == ("rejected", "not_recorded")
 
 
 def test_twilio_recordings_leave_the_meta_flags_empty(client: TestClient, channels: Channels) -> None:
@@ -305,7 +306,7 @@ def test_twilio_recordings_leave_the_meta_flags_empty(client: TestClient, channe
     (recording,) = recordings()
     assert recording.status == "stored"
     assert recording.is_voice_note is None and recording.forwarded is None
-    assert recording.audio_origin == "unknown" and recording.qc_status == "pending"
+    assert recording.audio_origin == "unknown" and recording.qc_status == "accepted"
 
 
 def test_forwarded_meta_voice_note_while_a_sentence_is_open(client: TestClient, channels: Channels) -> None:
@@ -315,6 +316,19 @@ def test_forwarded_meta_voice_note_while_a_sentence_is_open(client: TestClient, 
 
     reply = channels.meta.sent[-1][2]
     assert reply.startswith("That voice note was forwarded.") and "Sentence 1 of 3:" in reply
+    (first,) = assignments()
+    assert first.status == "sent" and first.retake_count == 0
+    (recording,) = recordings()
+    assert recording.assignment_id == first.id and recording.qc_reason == "not_recorded"
+
+
+def test_uploaded_audio_file_while_a_sentence_is_open(client: TestClient, channels: Channels) -> None:
+    from_meta(client, mp.text(WA_ID, "Hi"))
+    from_meta(client, mp.text(WA_ID, "1"))
+    from_meta(client, mp.audio_file(WA_ID))
+
+    reply = channels.meta.sent[-1][2]
+    assert reply.startswith("That looks like an audio file rather than a voice note.") and "Sentence 1 of 3:" in reply
     (first,) = assignments()
     assert first.status == "sent" and first.retake_count == 0
     (recording,) = recordings()

@@ -104,3 +104,6 @@ Below is what needs to change, in order of priority.
 - Item 5: before round 1.
 
 Can we have a call this week to go through it?
+# Document moved
+
+See {doc}`/platform/plans/supervision-qc-contract`.

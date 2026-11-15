@@ -292,3 +292,17 @@ class MetaChannel:
         if caption:
             image["caption"] = caption
         return self._send(to, {"type": "image", "image": image})
+
+    def send_template(self, to: str, name: str, language: str, body_params: list[str]) -> str:
+        """An approved message template, which WhatsApp allows outside the 24-hour window.
+
+        body_params fill the body's {{1}}, {{2}}, ... in order. A template that isn't
+        approved, or a wrong name, language or parameter count, comes back as a
+        permanent MessageSendError with Meta's code (e.g. 132001, 132000).
+        """
+        template: dict[str, Any] = {"name": name, "language": {"code": language}}
+        if body_params:
+            template["components"] = [
+                {"type": "body", "parameters": [{"type": "text", "text": str(value)} for value in body_params]}
+            ]
+        return self._send(to, {"type": "template", "template": template})

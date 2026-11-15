@@ -94,7 +94,7 @@ def test_after_a_reset_the_next_message_is_a_first_contact(mid_session: ChatHarn
     main(["P0006", "--yes"], confirm=never_asked)
     (offer,) = mid_session.text("Hi")
     assert "welcome to the Chichewa voice project" in offer.body
-    assert "A few tips for good recordings" in offer.body  # instructions again
+    assert "swipe right on my message" in offer.body  # instructions again
 
 
 def test_dry_run_changes_nothing(mid_session: ChatHarness, capsys: pytest.CaptureFixture) -> None:

@@ -18,7 +18,7 @@ from src.channels.twilio import TwilioChannel
 from src.conversation.engine import respond
 from src.conversation.outbound import send_outbound
 from src.storage.db import get_sync_sessionmaker
-from src.storage.audio import apply_audio_origin
+from src.storage.audio import apply_audio_origin, apply_length_flag
 from src.storage.duplicates import relink_duplicates
 from src.storage.models import InboundMessage, OutboundMessage, Participant, Recording
 
@@ -151,6 +151,7 @@ class ChatHarness:
                     content_sha256=digest,
                 )
                 apply_audio_origin(recording, origin)  # as the worker does
+                apply_length_flag(recording)
                 db.add(recording)
                 db.flush()
                 relink_duplicates(db, digest)

@@ -76,7 +76,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit("No WAV files found.")
     print(
         f"frame {checks.frame_ms} ms, active above {checks.active_dbfs:g} dBFS;"
-        f" no_speech under {checks.min_active_seconds:g} s active,"
+        f" no_speech under {checks.min_active_seconds:g} s active"
+        f" (or over {checks.long_clip_seconds:g} s long and under {100 * checks.long_clip_min_active_ratio:.0f}% active),"
         f" low_speech under {100 * checks.min_active_ratio:.0f}% active"
     )
     print(

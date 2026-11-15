@@ -49,3 +49,5 @@
 | 2026-11-12 | Meta approved the registration welcome template; enabled automatic sending after successful participant imports. Only new, eligible participants are welcomed; dry runs send nothing and `--no-send-welcome` skips sending for one import. |
 
 | 2026-11-13 | Documentation reorganized by component; the overall methodology includes component sources at build time. QA remains in dedicated files; platform architecture and operations are separate. |
+
+| 2026-11-15 | Pictures may include real people and faces; public figures, political content and sensitive situations are rejected or flagged instead. |

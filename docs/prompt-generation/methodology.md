@@ -1,43 +1,57 @@
 # Prompt-generation methodology
 
-Recordings are classified at two levels:
+Source: ZaZo AI Ltd (2026), *Chichewa Speech Project: Prompt Generation and Review Manual*, supplied as `prompt-generation-guide-v2.pdf`. Page numbers below refer to the printed PDF pages. These documents adapt the guide; they do not establish that the described annotation platform is already implemented.
 
-- **Speech type** (`speech_type`): *scripted*, read aloud from a given text, or *spontaneous*, in
-  the participant's own words. This is the main split for ASR use (read vs. spontaneous speech).
-- **Task type** (`task_type`): how the speech was elicited. Each task type belongs to exactly one
-  speech type.
+## Study design
 
-| Speech type | Task type | Shown to participants as | What the participant does | Prompted | Each prompt recorded by |
-|---|---|---|---|---|---|
-| Scripted | Read sentences (`sentence`) | Reading sentences | Reads a sentence aloud | Yes | 5 speakers |
-| Spontaneous | Describe pictures (`image`) | Describing pictures | Describes an image in their own words | Yes | 7 speakers (pilot) |
-| Spontaneous | Conversation starters (`conversation_starter`) | Answering questions | Answers an open question freely | Yes | 3 speakers |
-| Spontaneous | Free speech (`free_speech`) | Talking about anything | Talks about anything they like ("speak from the heart") | No | — |
+Prepare a varied, reviewed prompt bank for 500 hours of Chichewa speech: 150 hours scripted and 350 hours spontaneous. The spontaneous component comprises picture descriptions, responses to conversation starters and unprompted free speech, including previously recorded audio. See [targets](targets.md) for quantities, duration assumptions and domain allocations (guide §§3–5, pp. 3–10).
 
-- Task types are defined in `config/assignment_settings.yaml` (`task_types`), each marked as
-  prompted or not and given its speech type. The speech type is not stored per recording: it is
-  derived from the task type, so changing a task type's speech type reclassifies all of its
-  recordings. Reports (e.g. the task-bank simulation) show it next to the task type and sum
-  minutes per speech type. With the current split the target is 30% scripted, 70% spontaneous.
-- **Prompt IDs** are assigned at import, one sequence per type: `S00001` sentences, `I0001` images,
-  `C0001` conversation starters. Free speech has no prompts. Imports must run in the same order on
-  every environment so IDs match (and match the browser app).
-- **Sentence length is controlled at selection, not fixed in transcription.** The aim is that a
-  read sentence fits within the clip limit, so the prompt text can serve as the transcript and
-  read speech needs as little transcription as possible.
-  - Import checks: target 8–25 words (hard limits 3–50); planned character-length check as well,
-    since Chichewa words are long and characters predict reading time better than words. Out-of-
-    target sentences are flagged, not rejected, and are assigned last.
-  - After the pilot, limits are calibrated from real reading times (median duration and seconds
-    per character per sentence); sentences whose readings are usually flagged `long_sentence`
-    (median over 30 s) or below 5 s are retired. This is a later, report-driven step.
-  - Sensitive questionnaire topics are excluded.
-- **Images:** organised into theme folders (theme = folder name); prepared copies are JPEG,
-  metadata stripped, resized for WhatsApp. No text in images, no recognisable real people.
-- **Conversation starters:** open questions that prompt free speech (not read aloud); in Chichewa
-  for the pilot onwards.
-- **Free speech (unprompted):** the bot invites the participant to talk about anything (their day,
-  their village, a story); captures genuinely spontaneous speech. Needs transcription.
-- **Coverage (prompted tasks):** a prompt stops being assigned once it has enough speakers
-  (accepted + recorded + unexpired sent); least-covered prompts go first; nobody gets the same
-  prompt twice.
+| Speech type | Task type in the collector | Elicitation |
+| --- | --- | --- |
+| Scripted | `sentence` | Read a supplied Chichewa sentence aloud. |
+| Spontaneous | `image` | Describe a picture in the participant's own words. |
+| Spontaneous | `conversation_starter` | Respond freely to an open-ended Chichewa question or invitation. |
+| Spontaneous | `free_speech` | Speak on a self-selected topic; no fixed prompt bank. |
+
+Speech type is derived from task type in `config/assignment_settings.yaml`. Sentence text provides a reference for checking readings; spontaneous responses require transcription.
+
+## Preparation and release process
+
+1. Plan batches against category and domain targets. Include several subjects, settings, vocabulary choices and experiences within each domain, rather than minor variations of one topic.
+2. AI/NLP leads extract candidate sentences from books, PDFs and online texts and prepare picture banks from image collections or manual sourcing/creation. Annotators primarily create conversation starters. Manual sentence or picture entry is used only for assigned tasks when enabled.
+3. Retain source category and available references. Keep picture origin, licence/permission and notes separately from importable image folders. Source information alone does not establish permission to reuse material.
+4. Screen candidate banks automatically for format, duplicates and category-specific problems, then load them for human review. Automation identifies problems; it does not approve content.
+5. Annotators apply the [manual](manual.md), make permitted text corrections, assign one primary domain, check metadata and approve, reject with a reason or flag uncertainty.
+6. Independently review newly created conversation starters. Apply supervisor sampling, agreement checks and adjudication described in [quality assurance](quality-assurance.md).
+7. The coordinator confirms batches for release after unresolved content and permission issues are settled. The data manager prepares and transfers approved prompts into the collection system. Preserve original content and review history.
+8. Monitor accepted recording duration, prompt reuse and domain coverage during collection. AI/NLP leads revisit estimates and assignment settings using observed results.
+
+## Picture content rules
+
+Real people and faces are allowed. Reject or flag pictures showing public figures (politicians or celebrities), political campaign events or party material. Reject or flag sensitive situations: patients receiving treatment, children in distress, funerals or grief, or people shown in a demeaning way. Keep the other criteria: no visible text, clear at phone size, culturally suitable and enough detail for a 15–30-second description. This project decision of 2026-11-15 supersedes the supplied guide’s restriction on real people.
+
+## Classification and metadata
+
+Record category, one primary domain, source category and an available source reference (document title, filename/page or URL). Prefill category and source details for loaded banks; annotators flag doubtful or missing information without inventing references. For manual entry, annotators supply source category and available reference. Picture provenance remains separate from importable folders (guide §3.1).
+
+Choose domains by overall meaning and the central activity or intended response. Growing maize is agriculture; cooking it is food; selling it is work/trade. A child visiting a hospital is health. School-fee budgeting may be finance, while access to schooling is education. Flag unresolved ambiguity, record the competing domains and use coordinator decisions consistently. Do not add domains or count an item under several domains. Domain scopes are in the [manual](manual.md).
+
+## Responsibilities
+
+| Role | Responsibility in the guide |
+| --- | --- |
+| Annotators | Complete orientation/practice; review or create assigned content; record decisions; escalate uncertainty and recurring problems; revise returned work. |
+| Prompt Annotation Coordinator: Gloria Chirwa / Evance Mathewe | Assign work, track category/domain progress, resolve escalations, confirm release batches and verify work/payment records. |
+| Supervisors (to be confirmed) | Check language, classification and decisions; give feedback, return work and escalate unresolved issues. |
+| AI/NLP leads: Dunstan / Ange | Prepare banks, confirm targets and methodological decisions, and approve substantive guideline changes. |
+| Data Manager / IT Lead: Stewart Chikomola | Maintain platform/access, preserve content and reviews, and transfer approved prompts. |
+
+Role names reflect the supplied guide (§2), rather than a verified current staffing roster.
+
+## Collection implementation and planning distinctions
+
+The guide defines reuse as accepted recordings by different speakers. Assignments, retakes and rejected recordings are not successful uses. The collector also reserves capacity for pending assignments; reservation is operational capacity, not achieved methodological reuse. Prompts carry over between rounds and participants should not receive the same prompt twice.
+
+The checked-in pilot settings use speaker ceilings of 5 sentences, 7 pictures and 3 conversation-starter responses per prompt, and an audio split of 30%/25%/25%/20%. The guide instead plans with reuse of 3/2/4 and a total-hour split of 30%/21%/35%/14%. These documents adopt the guide for production planning; configuration remains unchanged. Reconcile operational settings before production collection.
+
+Importer IDs use separate sequences: `S00001`, `I0001` and `C0001`. Free speech has no prompt IDs. Import order must remain consistent across environments where matching IDs are required. Technical handover details are in the [manual](manual.md).

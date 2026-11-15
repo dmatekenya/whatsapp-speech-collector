@@ -1,5 +1,9 @@
 # Prompt generation references
 
+## Primary project guide
+
+- ZaZo AI Ltd. (2026). *Chichewa Speech Project: Prompt Generation and Review Manual*. Supplied as `prompt-generation-guide-v2.pdf` (14 pages). Primary source for the [methodology](methodology.md), [targets](targets.md), [annotator manual](manual.md) and [quality assurance](quality-assurance.md). No shared source URL was supplied; the PDF is not stored in this repository.
+
 ## Guides and collection protocols
 
 - [Krewer, J. (2023). Creating community-driven datasets: Insights from Mozilla Common Voice activities in East Africa. GIZ.](https://assets.mofoprod.net/network/documents/Creating-Community-Driven-Datasets-Report-032023-GIZ-Mozilla.pdf) See printed pages 16–17 for sentence preparation and verification.

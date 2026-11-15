@@ -172,14 +172,14 @@ Deliver:
 - Image validation, exact duplicate checks and protected, small previews.
 - One-picture screen: zoom/view original detail, domain dropdown, prefilled source details, Approve/Reject/Flag, reason/note and save confirmation.
 - No image editing and no requirement for annotators to upload pictures.
-- Reject reasons including text in image, recognisable real person, poor clarity, unsuitable content, duplicate, implausible generated details and other.
+- Reject reasons including text in image, public figure or political content, sensitive situation, poor clarity, unsuitable content, duplicate, implausible generated details and other.
 - Supervisor queue, correction/return workflow, coordinator resolution and initial agreement assignments.
 - Counts by batch/domain/status and verified-work export.
 - Approved-folder export plus controlled live import, with retry and reconciliation.
 
-Image review criteria follow the manual: no text, no recognisable real people, clear at phone size, culturally suitable and enough detail for a 15–30-second description.
+Image review criteria follow the updated manual: no visible text, clear at phone size, culturally suitable and enough detail for a 15–30-second description. Real people and faces are allowed. Reject or flag pictures showing public figures (politicians or celebrities), political campaign events or party material. Reject or flag sensitive situations: patients receiving treatment, children in distress, funerals or grief, or people shown in a demeaning way.
 
-Automated file checks reuse the configured JPG/JPEG/PNG/WebP formats, nonempty/readable image check and 50 MB original limit. OCR, face detection and perceptual hashing may help later; they are not prerequisites for the first release and do not replace the annotator.
+Automated file checks reuse the configured JPG/JPEG/PNG/WebP formats, nonempty/readable image check and 50 MB original limit. OCR and perceptual hashing may help later; they are not prerequisites for the first release and do not replace the annotator.
 
 **Release 1 is ready when:**
 

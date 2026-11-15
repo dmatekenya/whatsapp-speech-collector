@@ -43,9 +43,9 @@ One image per screen, usable on a phone. The annotator sees:
 - Three buttons: **Approve**, **Reject** (reason required), **Flag** (note required).
 - A save confirmation, so they know the decision was recorded.
 
-An image passes if it has no text, no recognisable real person, is clear at phone size, is culturally suitable, and has enough detail for a 15–30 second description.
+An image passes if it has no visible text, is clear at phone size, is culturally suitable, and has enough detail for a 15–30 second description. Real people and faces are allowed. Reject or flag pictures showing public figures (politicians or celebrities), political campaign events or party material. Reject or flag sensitive situations: patients receiving treatment, children in distress, funerals or grief, or people shown in a demeaning way.
 
-Reject reasons: text in image, recognisable real person, poor clarity, unsuitable content, duplicate, implausible generated details, other.
+Reject reasons: text in image, public figure or political content, sensitive situation, poor clarity, unsuitable content, duplicate, implausible generated details, other.
 
 No image editing and no uploading by annotators.
 

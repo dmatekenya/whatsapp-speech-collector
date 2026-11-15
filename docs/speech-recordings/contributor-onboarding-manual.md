@@ -1,4 +1,4 @@
-# Contributor onboarding manual
+# Contributor Onboarding Manual
 
 Converted on 2026-11-13 from `contributor-onboarding-manual-v1.docx`. The supplied Word source is retained in `sources/`. Content is preserved; only Markdown formatting has been normalized.
 

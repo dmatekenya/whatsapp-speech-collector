@@ -1,4 +1,4 @@
-# Editing and publishing this book
+# Editing and Publishing This Book
 
 ## Organization and ownership
 
@@ -6,7 +6,7 @@ Each component owns its methodology, manual, targets where relevant, and a separ
 
 Missing source documents are marked as stubs. When incorporating a Google Docs export, record its source URL, owner, version and conversion date. Review Markdown tables, links and lists after conversion. The contributor Word original is retained in `speech-recordings/sources/`; the Markdown is the book's working copy.
 
-The decision log records changes in methods. Historical platform plans remain reference material, not current specifications. Old document paths retain short forwarding pages for repository readers.
+The repository-only decision log (`docs/decisions.md`) records changes in methods and is excluded from the published book. Historical platform plans remain reference material, not current specifications. Old document paths retain short forwarding pages for repository readers.
 
 ## Local checks
 

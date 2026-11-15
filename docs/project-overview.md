@@ -1,4 +1,4 @@
-# Project scope and design
+# Project Scope and Design
 
 ## Overview
 

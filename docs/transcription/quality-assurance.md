@@ -1,4 +1,4 @@
-# Transcription quality assurance
+# Transcription Quality Assurance
 
 - **Step 2, scoring (in place):** measures every transcribed clip on the droplet's CPU, with
   no GPU. A deliberately short set of metrics: each one catches a specific problem that can be

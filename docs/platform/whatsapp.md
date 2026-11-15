@@ -1,4 +1,4 @@
-# WhatsApp integration
+# WhatsApp Integration
 
 - **Why WhatsApp:** participants already use it daily (little training), and in Malawi people buy
   cheap WhatsApp-only data bundles, so recording costs them little. Everything stays inside

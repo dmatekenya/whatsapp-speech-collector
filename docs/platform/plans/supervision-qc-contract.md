@@ -1,4 +1,4 @@
-# Supervision dashboard and QC: what to change
+# Supervision Dashboard and QC: What to Change
 
 For: Stewart (SC). From: Dunstan. Date: 2026-11-10.
 Suggested repo path: `docs/plans/supervision-qc-contract.md`.

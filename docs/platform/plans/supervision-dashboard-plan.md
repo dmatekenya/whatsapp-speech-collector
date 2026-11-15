@@ -1,4 +1,4 @@
-# Supervision dashboard: plan
+# Supervision Dashboard: Plan
 
 Owner: Stewart Chikomola. Reviewer: Dunstan Matekenya. Drafted 2026-11-07; decisions of
 2026-11-07 included (sections 3, 4.4, 6 and 10).

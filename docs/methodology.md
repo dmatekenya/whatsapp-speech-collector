@@ -1,6 +1,6 @@
-# Overall methodology
+# Overall Methodology
 
-This page assembles the authoritative component methodologies, targets and QA protocols. Edit the component files rather than maintaining a second copy here. Manuals and platform implementation details are separate chapters. The decision history is in {doc}`/decisions`.
+This page assembles the authoritative component methodologies, targets and QA protocols. Edit the component files rather than maintaining a second copy here. Manuals and platform implementation details are separate chapters.
 
 ```{include} project-overview.md
 :heading-offset: 1

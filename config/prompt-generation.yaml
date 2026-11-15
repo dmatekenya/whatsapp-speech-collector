@@ -1,0 +1,241 @@
+# ==================================
+# PICTURE CANDIDATE HARVEST SETTINGS
+# ==================================
+# Used by scripts/harvest_images.py. Quotas follow the prompt manual (Table 6, 6,300
+# pictures). Folder keys are the short domain names used for release folders.
+
+output_root: data/prompts/images/harvest
+cache_dir: data/prompts/images/harvest/_cache
+
+# Harvest up to quota x target_multiplier per domain, to allow for rejections.
+target_multiplier: 1.5
+
+# Minimum original image size (pixels) to keep a candidate.
+min_width: 800
+min_height: 600
+
+# Thumbnail width requested from sources that can resize (pixels).
+thumb_width: 512
+
+# Near-duplicate threshold: maximum Hamming distance between perceptual hashes.
+phash_max_distance: 6
+
+# Licences
+# --------
+# Only openly licensed or public-domain images are kept. Set to true only if the project
+# is confirmed as non-commercial.
+allow_non_commercial: false
+
+# Politeness towards source APIs
+http:
+  timeout_seconds: 30
+  pause_seconds: 1.0        # pause between API calls
+  max_retries: 4
+  contact_email_env: HARVEST_CONTACT_EMAIL
+
+# Malawi relevance
+# ----------------
+malawi_bbox:
+  min_lat: -17.2
+  max_lat: -9.3
+  min_lon: 32.6
+  max_lon: 35.95
+
+malawi_place_names:
+  - malawi
+  - malaŵi
+  - lilongwe
+  - blantyre
+  - limbe
+  - zomba
+  - mzuzu
+  - mangochi
+  - salima
+  - kasungu
+  - nkhata bay
+  - nkhotakota
+  - dedza
+  - mulanje
+  - thyolo
+  - karonga
+  - chikwawa
+  - nsanje
+  - machinga
+  - balaka
+  - ntcheu
+  - mchinji
+  - dowa
+  - ntchisi
+  - mwanza
+  - rumphi
+  - chitipa
+  - likoma
+  - lake malawi
+  - liwonde
+  - monkey bay
+  - cape maclear
+
+# Titles or categories containing these words are dropped (not photos of scenes).
+unwanted_keywords:
+  - map
+  - logo
+  - flag
+  - coat of arms
+  - diagram
+  - chart
+  - document
+  - scan
+  - stamp
+  - banknote
+  - coin
+  - postcard
+  - poster
+  - screenshot
+  - signature
+
+allowed_mime_types:
+  - image/jpeg
+  - image/png
+  - image/webp
+
+# Domains
+# -------
+# key: folder name; quota: pictures needed (manual Table 6); queries: search terms.
+domains:
+  - key: family
+    label: Family, relationships and community life
+    quota: 945
+    queries:
+      - family Malawi
+      - mother and child Malawi
+      - village life Malawi
+      - children playing Malawi
+      - grandmother Malawi
+      - community meeting Malawi
+      - household Malawi
+
+  - key: food
+    label: Food, cooking and nutrition
+    quota: 756
+    queries:
+      - nsima Malawi
+      - cooking Malawi
+      - food Malawi
+      - pounding maize Malawi
+      - kitchen Malawi
+      - fish chambo Malawi
+      - meal Malawi
+
+  - key: health
+    label: Health, hygiene and wellbeing
+    quota: 756
+    queries:
+      - health centre Malawi
+      - clinic Malawi
+      - hospital Malawi
+      - hand washing Malawi
+      - sanitation Malawi
+      - nurse Malawi
+
+  - key: agriculture
+    label: Agriculture, livestock and fishing
+    quota: 693
+    queries:
+      - maize field Malawi
+      - farmer Malawi
+      - harvest Malawi
+      - tobacco Malawi
+      - goats Malawi
+      - cattle Malawi
+      - fishing Lake Malawi
+      - tea estate Malawi
+
+  - key: work-trade
+    label: Work, trade and personal finance
+    quota: 630
+    queries:
+      - market Malawi
+      - market stall Malawi
+      - vendor Malawi
+      - shop Malawi
+      - tailor Malawi
+      - carpenter Malawi
+      - brick making Malawi
+
+  - key: education
+    label: Education and learning
+    quota: 630
+    queries:
+      - school Malawi
+      - classroom Malawi
+      - pupils Malawi
+      - students Malawi
+      - teacher Malawi
+      - library Malawi
+
+  - key: transport
+    label: Transport and travel
+    quota: 441
+    queries:
+      - minibus Malawi
+      - bicycle Malawi
+      - bicycle taxi Malawi
+      - road Malawi
+      - bus station Malawi
+      - boat Lake Malawi
+      - ferry Ilala Malawi
+
+  - key: sport-leisure
+    label: Sport, recreation and entertainment
+    quota: 441
+    queries:
+      - football Malawi
+      - netball Malawi
+      - music Malawi
+      - dance Malawi
+      - bawo game Malawi
+      - children games Malawi
+
+  - key: nature
+    label: Nature, weather and environment
+    quota: 378
+    queries:
+      - landscape Malawi
+      - Lake Malawi shore
+      - Mulanje mountain
+      - rain Malawi
+      - river Malawi
+      - baobab Malawi
+      - wildlife Malawi
+
+  - key: technology
+    label: Technology and communication
+    quota: 252
+    queries:
+      - mobile phone Malawi
+      - radio Malawi
+      - computer Malawi
+      - solar panel Malawi
+      - internet Malawi
+
+  - key: culture
+    label: Culture, traditions and celebrations
+    quota: 252
+    queries:
+      - gule wamkulu
+      - wedding Malawi
+      - traditional dance Malawi
+      - church Malawi
+      - chitenje
+      - ceremony Malawi
+
+  - key: public-services
+    label: Public services and civic life
+    quota: 126
+    queries:
+      - borehole Malawi
+      - water point Malawi
+      - police station Malawi
+      - post office Malawi
+      - district office Malawi
+      - market building Malawi

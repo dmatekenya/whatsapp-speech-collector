@@ -1,4 +1,4 @@
-# Deploying and running the speech collector
+# Deploying and Running the Speech Collector
 
 This guide covers the DigitalOcean droplet that runs the WhatsApp bot. It explains how to set it
 up, update it and back it up, connect WhatsApp, start a collection run, look after testers and

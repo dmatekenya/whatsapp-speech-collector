@@ -1,4 +1,4 @@
-# Audio quality labelling plan
+# Audio Quality Labelling Plan
 
 Last updated: 2026-11-11. Part of the audio-quality experiments ([handover.md](handover.md)).
 

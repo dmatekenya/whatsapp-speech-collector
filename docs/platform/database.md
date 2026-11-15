@@ -1,4 +1,4 @@
-# Database schema
+# Database Schema
 
 Last updated: 2026-11-11
 

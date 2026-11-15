@@ -1,4 +1,4 @@
-# Privacy and data protection
+# Privacy and Data Protection
 
 - Privacy notice for participants (draft) covers what is collected, purpose, dataset use, sharing,
   retention, security and participants' choices (stop at any time; deletion on request).

@@ -13,7 +13,7 @@ html:
   use_edit_page_button: true
   use_repository_button: true
   use_issues_button: true
-  favicon: images/favicon.ico
+  favicon: images/logo.png
   baseurl: https://dmatekenya.github.io/whatsapp-speech-collector/
 execute:
   execute_notebooks: 'off'

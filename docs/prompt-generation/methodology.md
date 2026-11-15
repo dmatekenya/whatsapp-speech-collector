@@ -4,7 +4,7 @@ Source: ZaZo AI Ltd (2026), *Chichewa Speech Project: Prompt Generation and Revi
 
 ## Study design
 
-Prepare a varied, reviewed prompt bank for 500 hours of Chichewa speech: 150 hours scripted and 350 hours spontaneous. The spontaneous component comprises picture descriptions, responses to conversation starters and unprompted free speech, including previously recorded audio. See [targets](targets.md) for quantities, duration assumptions and domain allocations (guide §§3–5, pp. 3–10).
+Prepare a varied, reviewed prompt bank for 500 hours of Chichewa speech: 150 hours scripted and 350 hours spontaneous. The spontaneous component comprises picture descriptions, responses to conversation starters and unprompted free speech, including previously recorded audio. See {doc}`targets </prompt-generation/targets>` for quantities, duration assumptions and domain allocations (guide §§3–5, pp. 3–10).
 
 | Speech type | Task type in the collector | Elicitation |
 | --- | --- | --- |
@@ -21,8 +21,8 @@ Speech type is derived from task type in `config/assignment_settings.yaml`. Sent
 2. AI/NLP leads extract candidate sentences from books, PDFs and online texts and prepare picture banks from image collections or manual sourcing/creation. Annotators primarily create conversation starters. Manual sentence or picture entry is used only for assigned tasks when enabled.
 3. Retain source category and available references. Keep picture origin, licence/permission and notes separately from importable image folders. Source information alone does not establish permission to reuse material.
 4. Screen candidate banks automatically for format, duplicates and category-specific problems, then load them for human review. Automation identifies problems; it does not approve content.
-5. Annotators apply the [manual](manual.md), make permitted text corrections, assign one primary domain, check metadata and approve, reject with a reason or flag uncertainty.
-6. Independently review newly created conversation starters. Apply supervisor sampling, agreement checks and adjudication described in [quality assurance](quality-assurance.md).
+5. Annotators apply the {doc}`manual </prompt-generation/manual>`, make permitted text corrections, assign one primary domain, check metadata and approve, reject with a reason or flag uncertainty.
+6. Independently review newly created conversation starters. Apply supervisor sampling, agreement checks and adjudication described in {doc}`quality assurance </prompt-generation/quality-assurance>`.
 7. The coordinator confirms batches for release after unresolved content and permission issues are settled. The data manager prepares and transfers approved prompts into the collection system. Preserve original content and review history.
 8. Monitor accepted recording duration, prompt reuse and domain coverage during collection. AI/NLP leads revisit estimates and assignment settings using observed results.
 
@@ -34,7 +34,7 @@ Real people and faces are allowed. Reject or flag pictures showing public figure
 
 Record category, one primary domain, source category and an available source reference (document title, filename/page or URL). Prefill category and source details for loaded banks; annotators flag doubtful or missing information without inventing references. For manual entry, annotators supply source category and available reference. Picture provenance remains separate from importable folders (guide §3.1).
 
-Choose domains by overall meaning and the central activity or intended response. Growing maize is agriculture; cooking it is food; selling it is work/trade. A child visiting a hospital is health. School-fee budgeting may be finance, while access to schooling is education. Flag unresolved ambiguity, record the competing domains and use coordinator decisions consistently. Do not add domains or count an item under several domains. Domain scopes are in the [manual](manual.md).
+Choose domains by overall meaning and the central activity or intended response. Growing maize is agriculture; cooking it is food; selling it is work/trade. A child visiting a hospital is health. School-fee budgeting may be finance, while access to schooling is education. Flag unresolved ambiguity, record the competing domains and use coordinator decisions consistently. Do not add domains or count an item under several domains. Domain scopes are in the {doc}`manual </prompt-generation/manual>`.
 
 ## Responsibilities
 
@@ -54,4 +54,4 @@ The guide defines reuse as accepted recordings by different speakers. Assignment
 
 The checked-in pilot settings use speaker ceilings of 5 sentences, 7 pictures and 3 conversation-starter responses per prompt, and an audio split of 30%/25%/25%/20%. The guide instead plans with reuse of 3/2/4 and a total-hour split of 30%/21%/35%/14%. These documents adopt the guide for production planning; configuration remains unchanged. Reconcile operational settings before production collection.
 
-Importer IDs use separate sequences: `S00001`, `I0001` and `C0001`. Free speech has no prompt IDs. Import order must remain consistent across environments where matching IDs are required. Technical handover details are in the [manual](manual.md).
+Importer IDs use separate sequences: `S00001`, `I0001` and `C0001`. Free speech has no prompt IDs. Import order must remain consistent across environments where matching IDs are required. Technical handover details are in the {doc}`manual </prompt-generation/manual>`.

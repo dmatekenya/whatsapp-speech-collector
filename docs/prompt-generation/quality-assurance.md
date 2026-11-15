@@ -7,7 +7,7 @@ Adapted from ZaZo AI Ltd (2026), *Chichewa Speech Project: Prompt Generation and
 | Stage | Responsibility | Checks |
 | --- | --- | --- |
 | Automated preparation | AI/NLP leads and data manager | Sentences: agreed word range, likely non-Chichewa text, duplicates and extraction problems. Pictures: readability, supported formats and exact duplicates. |
-| Annotation | Prompt annotators | Apply category-specific [manual](manual.md) checks, make permitted corrections, assign one domain and check source attributes. Approve suitable items, reject with a reason and flag uncertainty. |
+| Annotation | Prompt annotators | Apply category-specific {doc}`manual </prompt-generation/manual>` checks, make permitted corrections, assign one domain and check source attributes. Approve suitable items, reject with a reason and flag uncertainty. |
 | Supervisor review | Supervisors | Randomly review 10% of each annotator's completed work, covering every assigned category. Check content quality, corrections, domains and decisions. Review flagged cases separately, in addition to the random sample. |
 
 Automation flags potential problems and does not replace human review. The guide does not establish that all proposed automated checks already exist in the collector.
@@ -32,7 +32,7 @@ Retain original content, corrections, domain assignments, review decisions, note
 
 Image imports check readable, nonempty sources, supported JPG/JPEG/PNG/WebP formats, a 50 MB source limit and exact byte duplicates. Automatic resizing and metadata removal do not replace checks for visible text, public figures or political content, sensitive situations, near-duplicate scenes or generated distortions. Real people and faces are allowed. Reject or flag pictures showing public figures (politicians or celebrities), political campaign events or party material. Reject or flag sensitive situations: patients receiving treatment, children in distress, funerals or grief, or people shown in a demeaning way. Keep the other picture criteria: no visible text, clear at phone size, culturally suitable and enough detail for a 15–30-second description.
 
-Before importing, run a dry run, inspect warnings, verify domain spelling/completeness and provenance, and resolve invalid items. `--strict` prevents partial imports when any row is invalid. Preserve review/provenance records alongside the released batch; keep non-image provenance outside importable image folders. See the [manual](manual.md) for file layout and export constraints.
+Before importing, run a dry run, inspect warnings, verify domain spelling/completeness and provenance, and resolve invalid items. `--strict` prevents partial imports when any row is invalid. Preserve review/provenance records alongside the released batch; keep non-image provenance outside importable image folders. See the {doc}`manual </prompt-generation/manual>` for file layout and export constraints.
 
 ## Details still to define
 

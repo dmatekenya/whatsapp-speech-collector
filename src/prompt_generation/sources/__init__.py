@@ -21,4 +21,12 @@ def build_source(name: str, http, cfg) -> Source:
         from .commons import CommonsSource
 
         return CommonsSource(http, thumb_width=cfg.thumb_width)
-    raise ValueError(f"Unknown source {name!r}; available: commons")
+    if name == "openverse":
+        from .openverse import OpenverseSource
+
+        return OpenverseSource(http, cfg)
+    if name == "flickr":
+        from .flickr import FlickrSource
+
+        return FlickrSource(http, cfg)
+    raise ValueError(f"Unknown source {name!r}; available: commons, openverse, flickr")

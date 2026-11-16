@@ -12,24 +12,7 @@ parts:
   - file: prompt-generation/manual
   - file: prompt-generation/targets
   - file: prompt-generation/quality-assurance
-- caption: Speech Recordings
-  chapters:
-  - file: speech-recordings/methodology
-    sections:
-    - file: speech-recordings/contributor-onboarding-manual
-    - file: speech-recordings/targets
-    - file: speech-recordings/quality-assurance
-  - file: speech-recordings/audio-quality/handover
-    sections:
-    - file: speech-recordings/audio-quality/recording-guide
-    - file: speech-recordings/audio-quality/labelling-plan
-- caption: Transcription
-  chapters:
-  - file: transcription/methodology
-    sections:
-    - file: transcription/manual
-    - file: transcription/quality-assurance
-- caption: Platform
+- caption: WhatsApp Platform
   chapters:
   - file: platform/architecture
     sections:
@@ -41,6 +24,23 @@ parts:
     - file: platform/plans/supervision-qc-contract
     - file: platform/dashboard/updates-2026-11-11
     - file: platform/plans/meta-cloud-api-migration-plan
+- caption: Speech Recordings
+  chapters:
+  - file: speech-recordings/methodology
+    sections:
+    - file: speech-recordings/contributor-onboarding-manual
+    - file: speech-recordings/targets
+    - file: speech-recordings/quality-assurance
+  - file: speech-recordings/audio-quality/handover
+    sections:
+    - file: speech-recordings/audio-quality/recording-guide
+    - file: speech-recordings/audio-quality/labelling-plan
+- caption: Audio Transcription
+  chapters:
+  - file: transcription/methodology
+    sections:
+    - file: transcription/manual
+    - file: transcription/quality-assurance
 - caption: Team and Documentation
   chapters:
   - file: onboarding-ange

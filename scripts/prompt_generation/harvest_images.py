@@ -1,7 +1,7 @@
 """Harvest picture-prompt candidates from image sources.
 
 Example:
-    uv run python -m scripts.harvest_images --sources commons \
+    uv run python -m scripts.prompt_generation.harvest_images --sources commons \
         --domains food,transport --limit-per-query 20 --run-id 2026-11-15-commons-test
 
 Writes data/prompts/images/harvest/<run-id>/candidates.csv, thumbs/ and run-log.json.
@@ -20,6 +20,10 @@ from src.prompt_generation.config import load_config
 from src.prompt_generation.harvest import format_summary, run_harvest
 from src.prompt_generation.http import HttpClient
 from src.prompt_generation.sources import build_source
+try:
+    from dotenv import load_dotenv
+except ImportError:  # python-dotenv is optional; `uv run --env-file .env` also works
+    load_dotenv = None
 
 DEFAULT_CONFIG = Path("config/prompt-generation.yaml")
 
@@ -27,7 +31,7 @@ DEFAULT_CONFIG = Path("config/prompt-generation.yaml")
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    p.add_argument("--sources", default="commons", help="comma-separated, e.g. commons")
+    p.add_argument("--sources", default="commons", help="comma-separated, e.g. commons,openverse,flickr")
     p.add_argument("--domains", default="all", help="comma-separated domain keys, or 'all'")
     p.add_argument("--limit-per-query", type=int, default=50)
     p.add_argument("--run-id", default=datetime.now().strftime("%Y-%m-%d-%H%M"))
@@ -38,6 +42,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if load_dotenv:
+        load_dotenv()
     args = parse_args(argv)
     logging.basicConfig(
         level=logging.INFO if args.verbose else logging.WARNING,

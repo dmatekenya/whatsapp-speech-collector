@@ -60,9 +60,17 @@ def run_harvest(
 
     # 1. Search (metadata only)
     candidates: list[Candidate] = []
+    for source in sources:
+        sweep = getattr(source, "geo_sweep", None)
+        if sweep is not None:
+            found = sweep()
+            log.info("unassigned | %s | geo-sweep -> %d", source.name, len(found))
+            candidates.extend(found)
     for key in domain_keys:
         domain = cfg.domain(key)
         for source in sources:
+            if not getattr(source, "text_enabled", True):
+                continue
             for query in domain.queries:
                 try:
                     found = source.search(query, key, limit_per_query)
@@ -75,6 +83,8 @@ def run_harvest(
     # 2. Metadata filters and exact duplicates
     filters.apply_metadata_filters(candidates, cfg)
     filters.drop_exact_duplicates(candidates)
+    filters.cap_per_creator_day(candidates, cfg.max_per_creator_day)
+    filters.cap_per_creator_domain(candidates, cfg.max_per_creator_domain)
 
     # 3. Thumbnails, hashes, near-duplicates, optional OCR
     checks.fetch_thumbnails(candidates, thumbs_dir, download)
@@ -105,7 +115,7 @@ def _write_outputs(result, cfg, domain_keys, source_names, run_id, limit_per_que
 
     summary = [
         {**row, "dropped": dict(row["dropped"]),
-         "target": cfg.target(row["domain"])}
+         "target": None if row["domain"] == "unassigned" else cfg.target(row["domain"])}
         for row in result.summary()
     ]
     log_data = {
@@ -125,8 +135,9 @@ def format_summary(result: HarvestResult, cfg: HarvestConfig) -> str:
     lines = [f"{'domain':<16}{'source':<10}{'harvested':>10}{'kept':>7}{'target':>8}  dropped"]
     for row in result.summary():
         dropped = ", ".join(f"{k}={v}" for k, v in row["dropped"].most_common()) or "-"
+        target = "-" if row["domain"] == "unassigned" else str(cfg.target(row["domain"]))
         lines.append(
             f"{row['domain']:<16}{row['source']:<10}{row['harvested']:>10}{row['kept']:>7}"
-            f"{cfg.target(row['domain']):>8}  {dropped}"
+            f"{target:>8}  {dropped}"
         )
     return "\n".join(lines)

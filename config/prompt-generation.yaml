@@ -1,7 +1,7 @@
 # ==================================
 # PICTURE CANDIDATE HARVEST SETTINGS
 # ==================================
-# Used by scripts/harvest_images.py. Quotas follow the prompt manual (Table 6, 6,300
+# Used by scripts/prompt_generation/harvest_images.py. Quotas follow the prompt manual (Table 6, 6,300
 # pictures). Folder keys are the short domain names used for release folders.
 
 output_root: data/prompts/images/harvest
@@ -11,11 +11,16 @@ cache_dir: data/prompts/images/harvest/_cache
 target_multiplier: 1.5
 
 # Minimum original image size (pixels) to keep a candidate.
-min_width: 800
-min_height: 600
+min_width: 640
+min_height: 480
 
 # Thumbnail width requested from sources that can resize (pixels).
 thumb_width: 512
+
+# Keep at most this many photos from the same creator on the same day (0 = no cap).
+max_per_creator_day: 10
+# Keep at most this many photos from the same creator per domain (0 = no cap).
+max_per_creator_domain: 40
 
 # Near-duplicate threshold: maximum Hamming distance between perceptual hashes.
 phash_max_distance: 6
@@ -25,6 +30,11 @@ phash_max_distance: 6
 # Only openly licensed or public-domain images are kept. Set to true only if the project
 # is confirmed as non-commercial.
 allow_non_commercial: false
+
+# Flickr geo-sweep runs once per harvest; text runs per domain query.
+flickr:
+  modes: [geo-sweep,text]
+  api_key_env: FLICKR_API_KEY
 
 # Politeness towards source APIs
 http:
@@ -188,6 +198,7 @@ domains:
   - key: sport-leisure
     label: Sport, recreation and entertainment
     quota: 441
+    location: any
     queries:
       - football Malawi
       - netball Malawi
@@ -195,6 +206,8 @@ domains:
       - dance Malawi
       - bawo game Malawi
       - children games Malawi
+      - watching football on television Africa
+      - village football match Africa
 
   - key: nature
     label: Nature, weather and environment
@@ -211,12 +224,16 @@ domains:
   - key: technology
     label: Technology and communication
     quota: 252
+    location: any
     queries:
       - mobile phone Malawi
       - radio Malawi
       - computer Malawi
       - solar panel Malawi
       - internet Malawi
+      - mobile money Africa
+      - charging phone solar Africa
+      - listening to radio Africa
 
   - key: culture
     label: Culture, traditions and celebrations
@@ -239,3 +256,6 @@ domains:
       - post office Malawi
       - district office Malawi
       - market building Malawi
+
+# Drop photos dated before this year (photos with no date are kept).
+min_year: 2000

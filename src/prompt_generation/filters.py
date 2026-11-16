@@ -16,7 +16,9 @@ _OPEN_MARKERS = (
     "cc0", "cc by", "cc-by", "creative commons", "public domain", "pdm",
     "no known copyright", "no restrictions", "copyrighted free use",
     "attribution", "gfdl", "free art", "us government work",
+    "ogl v", "open government licen", "open-government-licen",
 )
+
 _NC_PATTERN = re.compile(r"(\bnc\b|non-?commercial)")
 _CLOSED_MARKERS = ("all rights reserved", "fair use", "non-free")
 
@@ -63,6 +65,13 @@ def malawi_signal(c: Candidate, cfg: HarvestConfig) -> str:
 # =============
 # APPLY FILTERS
 # =============
+_YEAR_RE = re.compile(r"\b(18|19|20)\d{2}\b")
+
+
+def year_taken(c: Candidate) -> int | None:
+    """First plausible year in the photo's date field, or None if there is none."""
+    match = _YEAR_RE.search(c.date_taken or "")
+    return int(match.group()) if match else None
 
 
 def apply_metadata_filters(candidates: list[Candidate], cfg: HarvestConfig) -> None:
@@ -83,7 +92,15 @@ def apply_metadata_filters(candidates: list[Candidate], cfg: HarvestConfig) -> N
         if c.width and c.height and (c.width < cfg.min_width or c.height < cfg.min_height):
             c.drop("too_small")
             continue
-        if c.malawi_signal == "none":
+        year = year_taken(c)
+        if cfg.min_year and year is not None and year < cfg.min_year:
+            c.drop("too_old")
+            continue
+        if c.query_domain == "unassigned":
+            if c.malawi_signal != "geo":
+                c.drop("no_malawi_signal")
+            continue
+        if c.malawi_signal == "none" and cfg.domain(c.query_domain).location == "malawi":
             c.drop("no_malawi_signal")
 
 
@@ -104,3 +121,36 @@ def drop_exact_duplicates(candidates: list[Candidate]) -> None:
         seen_ids[cid] = cid
         if c.image_url:
             seen_urls[c.image_url] = cid
+
+
+# ==============
+# DIVERSITY CAPS
+# ==============
+
+
+def cap_per_creator_day(candidates: list[Candidate], max_n: int) -> None:
+    """Keep the first max_n photos per source, creator and date, in search order."""
+    if max_n <= 0:
+        return
+    counts: dict[tuple[str, str, str], int] = {}
+    for c in candidates:
+        if c.status == "dropped" or not c.creator or len(c.date_taken) < 10:
+            continue
+        key = (c.source, c.creator.lower(), c.date_taken[:10])
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] > max_n:
+            c.drop("event_cap")
+
+
+def cap_per_creator_domain(candidates: list[Candidate], max_n: int) -> None:
+    """Keep the first max_n photos per source, creator and query domain."""
+    if max_n <= 0:
+        return
+    counts: dict[tuple[str, str, str], int] = {}
+    for c in candidates:
+        if c.status == "dropped" or not c.creator:
+            continue
+        key = (c.source, c.creator.lower(), c.query_domain)
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] > max_n:
+            c.drop("creator_cap")

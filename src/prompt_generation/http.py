@@ -42,12 +42,13 @@ class HttpClient:
     # JSON GETS
     # =========
 
-    def get_json(self, source: str, url: str, params: dict[str, Any]) -> dict[str, Any]:
+    def get_json(self, source: str, url: str, params: dict[str, Any],
+                 headers: dict[str, str] | None = None) -> dict[str, Any]:
         cache_file = self._cache_path(source, url, params)
         if self.use_cache and cache_file.exists():
             return json.loads(cache_file.read_text(encoding="utf-8"))
 
-        response = self._request(url, params=params)
+        response = self._request(url, params=params, headers=headers)
         data = response.json()
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps(data), encoding="utf-8")

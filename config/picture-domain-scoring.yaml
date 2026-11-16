@@ -1,0 +1,121 @@
+# ===============================
+# PICTURE DOMAIN SCORING SETTINGS
+# ===============================
+# Used by scripts/prompt_generation/score_picture_domains.py and scripts/prompt_generation/picture_domain_eval.py. A vision model looks at each
+# kept candidate's thumbnail and suggests one primary domain. Suggestions are hidden from
+# annotators by default; the annotator's choice is final.
+
+backend: openrouter
+base_url: https://openrouter.ai/api/v1
+api_key_env: OPENROUTER_API_KEY
+
+# Models to compare. Check exact IDs with:
+#   python3 -m scripts.prompt_generation.score_picture_domains --list-models
+# and replace these if OpenRouter uses different names.
+models:
+  - anthropic/claude-haiku-5.5
+  - google/gemini-3-flash-preview
+  - openai/gpt-6-luna
+  - qwen/qwen2.5-vl-72b-instruct
+
+# Optional larger model for comparison (adds the most cost per image).
+larger_models:
+  - anthropic/claude-sonnet-5.5
+
+# Stop sending requests once this much has been spent in one run (USD, from OpenRouter's
+# reported cost). If a model does not report cost, max_calls_per_model is the fallback cap.
+max_spend_usd: 4.0
+max_calls_per_model: 300
+
+concurrency: 4
+temperature: 0
+max_tokens: 300
+timeout_seconds: 60
+max_retries: 3
+
+# Send the photo's title and categories with the image. They help with local terms
+# (e.g. "nsima") but can mislead; the evaluation can be run with and without them.
+include_metadata: true
+
+# ======
+# RUBRIC
+# ======
+
+instructions: |
+  You classify photos used as speaking prompts for a Chichewa speech project in Malawi.
+  Contributors will describe each photo aloud for 15 to 30 seconds.
+
+  Choose ONE primary domain for the photo, based on the CENTRAL VISIBLE ACTIVITY or subject:
+  what a viewer would mainly talk about. Use the domain keys exactly as written below.
+  If a usable photo shows no clear activity or subject that fits any domain, answer "unclear".
+
+  Answer "not-relevant" if the photo should not be used as a speaking prompt at all: a
+  posed portrait of one person with nothing else happening, a document, map or logo, a
+  scene clearly unrelated to everyday life in Malawi or nearby countries, or a photo too
+  poor to see what is happening. Public figures are allowed.
+  Also set these flags (true/false):
+  - sensitive: patients receiving treatment, people in distress or grief, funerals,
+    injury, or people shown in a demeaning way
+  - graphic_or_sexual: violence, blood, nudity or sexual content
+  - visible_text: readable words that a speaker might read out instead of describing
+  - poor_quality: blurry, very dark, or the subject is too small to see
+
+  Boundary rules:
+  - Selling or buying food at a market or shop: work-trade. Preparing, cooking or eating food: food.
+  - Growing crops, keeping animals or fishing: agriculture. Selling the produce: work-trade.
+  - Fetching water at a borehole or public tap: public-services when the water point is central;
+    family when the scene is mainly a household chore at home.
+  - Clinics, nurses, hand washing, sanitation, exercise for health: health.
+  - Schools, classrooms, pupils, studying, training: education.
+  - Vehicles, roads, bicycles, minibuses, boats used for travel: transport.
+    Fishing boats being used to fish: agriculture.
+  - Weddings, funerals, initiation, Gule Wamkulu, church services, traditional dress: culture.
+  - Football, netball, games, music and dance for fun, watching TV: sport-leisure.
+    Traditional or ceremonial dance: culture.
+  - Phones, radios, computers, solar chargers, mobile money: technology.
+  - Landscapes, weather, lakes, rivers, trees, wildlife, rubbish or pollution: nature.
+  - Family members, children at home, household routines, community gatherings: family.
+
+  Reply with JSON only, no other text:
+  {"domain": "<key, unclear or not-relevant>", "second_choice": "<key or null>",
+   "confidence": <0-1>, "reason": "<one short sentence>",
+   "flags": {"sensitive": false, "graphic_or_sexual": false, "visible_text": false,
+             "poor_quality": false}}
+
+domains:
+  - key: family
+    scope: Household routines, caregiving, friendships and community cooperation.
+    example: A parent helping a young child get dressed while another child puts on their shoes.
+  - key: food
+    scope: Ingredients, cooking, meals, preservation and eating customs.
+    example: Someone stirring nsima while another person prepares vegetables beside the cooking area.
+  - key: health
+    scope: Everyday wellbeing, exercise, sanitation and access to care.
+    example: A parent sitting with a child in a clinic waiting area while a nurse assists another patient.
+  - key: agriculture
+    scope: Cultivation, harvesting, storage, animal husbandry and fishing.
+    example: A family planting maize in a field, with one person making holes and another placing seeds.
+  - key: work-trade
+    scope: Occupations, markets, small businesses, purchases and saving.
+    example: A customer buying tomatoes from a seller, with other vegetables displayed nearby.
+  - key: education
+    scope: School, teaching, vocational training and learning outside the classroom.
+    example: Children walking to school with school bags, some chatting with their friends.
+  - key: transport
+    scope: Journeys, walking, bicycles, public transport, roads and directions.
+    example: People waiting beside a road while passengers get into a minibus carrying bags and baskets.
+  - key: sport-leisure
+    scope: Games, hobbies, music, dance, sport and media.
+    example: Friends watching a football match on television, with some cheering and others talking.
+  - key: nature
+    scope: Seasons, rainfall, landscapes, wildlife, water and waste.
+    example: A muddy road after rainfall, with puddles, nearby houses, and people choosing where to walk.
+  - key: technology
+    scope: Phones, messaging, internet use, radio and digital services.
+    example: Someone recording a voice message on a phone while sitting outside their home.
+  - key: culture
+    scope: Customs, clothing, ceremonies, language practices and oral traditions.
+    example: Guests eating and dancing at a wedding while others sit and talk nearby.
+  - key: public-services
+    scope: Community facilities, public information, services and local decisions.
+    example: People collecting water at a borehole, with buckets and containers waiting nearby.

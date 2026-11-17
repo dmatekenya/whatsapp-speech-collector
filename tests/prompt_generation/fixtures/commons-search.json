@@ -1,0 +1,87 @@
+{
+  "batchcomplete": true,
+  "continue": {"gsroffset": 4, "continue": "gsroffset||"},
+  "query": {
+    "pages": [
+      {
+        "pageid": 1002,
+        "ns": 6,
+        "title": "File:Woman cooking nsima, Dedza.jpg",
+        "index": 2,
+        "imagerepository": "local",
+        "imageinfo": [{
+          "size": 2400123, "width": 3000, "height": 2000,
+          "thumburl": "https://upload.wikimedia.org/thumb/b/b2/Woman_cooking.jpg/512px-Woman_cooking.jpg",
+          "thumbwidth": 512, "thumbheight": 341,
+          "url": "https://upload.wikimedia.org/b/b2/Woman_cooking.jpg",
+          "descriptionurl": "https://commons.wikimedia.org/wiki/File:Woman_cooking_nsima,_Dedza.jpg",
+          "mime": "image/jpeg",
+          "extmetadata": {
+            "ObjectName": {"value": "Woman cooking nsima, Dedza"},
+            "ImageDescription": {"value": "<p>A woman stirring <b>nsima</b> over a fire &amp; children nearby.</p>"},
+            "Artist": {"value": "<a href=\"//commons.wikimedia.org/wiki/User:Example\">Example Photographer</a>"},
+            "LicenseShortName": {"value": "CC BY-SA 4.0"},
+            "LicenseUrl": {"value": "https://creativecommons.org/licenses/by-sa/4.0"},
+            "DateTimeOriginal": {"value": "2019-06-02 10:15:00"},
+            "Categories": {"value": "Cooking in Malawi|Dedza District|Nsima"},
+            "GPSLatitude": {"value": "-14.37"},
+            "GPSLongitude": {"value": "34.33"}
+          }
+        }]
+      },
+      {
+        "pageid": 1001,
+        "ns": 6,
+        "title": "File:Market Lilongwe.jpg",
+        "index": 1,
+        "imageinfo": [{
+          "width": 1600, "height": 1200,
+          "thumburl": "https://upload.wikimedia.org/thumb/a/a1/Market.jpg/512px-Market.jpg",
+          "url": "https://upload.wikimedia.org/a/a1/Market.jpg",
+          "descriptionurl": "https://commons.wikimedia.org/wiki/File:Market_Lilongwe.jpg",
+          "mime": "image/jpeg",
+          "extmetadata": {
+            "ImageDescription": {"value": "Vegetable sellers at a market"},
+            "Artist": {"value": "Jane Doe"},
+            "LicenseShortName": {"value": "Public domain"},
+            "Categories": {"value": "Markets in Lilongwe"}
+          }
+        }]
+      },
+      {
+        "pageid": 1003,
+        "ns": 6,
+        "title": "File:Map of Malawi districts.png",
+        "index": 3,
+        "imageinfo": [{
+          "width": 2000, "height": 3000,
+          "thumburl": "https://upload.wikimedia.org/thumb/c/c3/Map.png/512px-Map.png",
+          "url": "https://upload.wikimedia.org/c/c3/Map.png",
+          "descriptionurl": "https://commons.wikimedia.org/wiki/File:Map_of_Malawi_districts.png",
+          "mime": "image/png",
+          "extmetadata": {
+            "LicenseShortName": {"value": "CC BY 3.0"},
+            "Categories": {"value": "Maps of Malawi"}
+          }
+        }]
+      },
+      {
+        "pageid": 1004,
+        "ns": 6,
+        "title": "File:Street scene.jpg",
+        "index": 4,
+        "imageinfo": [{
+          "width": 640, "height": 480,
+          "thumburl": "https://upload.wikimedia.org/thumb/d/d4/Street.jpg/512px-Street.jpg",
+          "url": "https://upload.wikimedia.org/d/d4/Street.jpg",
+          "descriptionurl": "https://commons.wikimedia.org/wiki/File:Street_scene.jpg",
+          "mime": "image/jpeg",
+          "extmetadata": {
+            "LicenseShortName": {"value": "CC BY-NC 2.0"},
+            "Categories": {"value": "Streets in Zambia"}
+          }
+        }]
+      }
+    ]
+  }
+}

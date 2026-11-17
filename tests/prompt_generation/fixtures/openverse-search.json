@@ -1,0 +1,143 @@
+{
+  "result_count": 5,
+  "page_count": 1,
+  "page_size": 20,
+  "page": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "159f03ba-9e75-497b-8dd2-000000000001",
+      "title": "Cooking nsima in Lilongwe",
+      "foreign_landing_url": "https://example.org/photos/1",
+      "url": "https://example.org/images/1.jpg",
+      "creator": "Example Photographer 1",
+      "creator_url": "https://example.org/people/1",
+      "license": "by",
+      "license_version": "2.0",
+      "license_url": "https://creativecommons.org/licenses/by/2.0/",
+      "provider": "flickr",
+      "source": "flickr",
+      "tags": [
+        {
+          "name": "Malawi",
+          "accuracy": null
+        },
+        {
+          "name": "cooking",
+          "accuracy": null
+        }
+      ],
+      "filetype": "jpg",
+      "width": 1600,
+      "height": 1200,
+      "thumbnail": "https://api.openverse.org/v1/images/159f03ba-9e75-497b-8dd2-000000000001/thumb/",
+      "mature": false,
+      "attribution": "Sample attribution"
+    },
+    {
+      "id": "159f03ba-9e75-497b-8dd2-000000000002",
+      "title": "Market in Blantyre",
+      "foreign_landing_url": "https://example.org/photos/2",
+      "url": "https://example.org/images/2.jpeg",
+      "creator": "Example Photographer 2",
+      "creator_url": "https://example.org/people/2",
+      "license": "by-nc",
+      "license_version": "4.0",
+      "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
+      "provider": "flickr",
+      "source": "flickr",
+      "tags": [
+        {
+          "name": "Malawi",
+          "accuracy": null
+        },
+        {
+          "name": "market",
+          "accuracy": null
+        }
+      ],
+      "filetype": "jpeg",
+      "width": 1600,
+      "height": 1200,
+      "thumbnail": "https://api.openverse.org/v1/images/159f03ba-9e75-497b-8dd2-000000000002/thumb/",
+      "mature": false,
+      "attribution": "Sample attribution"
+    },
+    {
+      "id": "159f03ba-9e75-497b-8dd2-000000000003",
+      "title": "Lake Malawi shore",
+      "foreign_landing_url": "https://example.org/photos/3",
+      "url": "https://example.org/images/3.webp",
+      "creator": "Example Photographer 3",
+      "creator_url": "https://example.org/people/3",
+      "license": "pdm",
+      "license_version": "1.0",
+      "license_url": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "provider": "met",
+      "source": "met",
+      "tags": [
+        {
+          "name": "Malawi",
+          "accuracy": null
+        }
+      ],
+      "filetype": "webp",
+      "width": 1600,
+      "height": 1200,
+      "thumbnail": "https://api.openverse.org/v1/images/159f03ba-9e75-497b-8dd2-000000000003/thumb/",
+      "mature": false,
+      "attribution": "Sample attribution"
+    },
+    {
+      "id": "159f03ba-9e75-497b-8dd2-000000000004",
+      "title": "Street in another country",
+      "foreign_landing_url": "https://example.org/photos/4",
+      "url": "https://example.org/images/4.tiff",
+      "creator": "Example Photographer 4",
+      "creator_url": "https://example.org/people/4",
+      "license": "cc0",
+      "license_version": "1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "provider": "stocksnap",
+      "source": "stocksnap",
+      "tags": [
+        {
+          "name": "street",
+          "accuracy": null
+        }
+      ],
+      "filetype": "tiff",
+      "width": null,
+      "height": null,
+      "thumbnail": "https://api.openverse.org/v1/images/159f03ba-9e75-497b-8dd2-000000000004/thumb/",
+      "mature": false,
+      "attribution": "Sample attribution"
+    },
+    {
+      "id": "159f03ba-9e75-497b-8dd2-000000000005",
+      "title": "Preparing vegetables in Dedza",
+      "foreign_landing_url": "https://example.org/photos/5",
+      "url": "https://example.org/images/5.png",
+      "creator": "Example Photographer 5",
+      "creator_url": "https://example.org/people/5",
+      "license": "by-sa",
+      "license_version": "2.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/2.0/",
+      "provider": "flickr",
+      "source": "flickr",
+      "tags": [
+        {
+          "name": "Dedza",
+          "accuracy": null
+        }
+      ],
+      "filetype": "png",
+      "width": 1600,
+      "height": 1200,
+      "thumbnail": "https://api.openverse.org/v1/images/159f03ba-9e75-497b-8dd2-000000000005/thumb/",
+      "mature": false,
+      "attribution": "Sample attribution"
+    }
+  ]
+}

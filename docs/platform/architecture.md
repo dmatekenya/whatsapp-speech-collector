@@ -1,4 +1,4 @@
-# Platform architecture
+# Platform Architecture
 
 The collector uses FastAPI, PostgreSQL, Redis/RQ, local file storage and a Modal GPU transcription service.
 

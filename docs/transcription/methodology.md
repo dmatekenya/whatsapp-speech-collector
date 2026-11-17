@@ -1,4 +1,4 @@
-# Transcription methodology
+# Transcription Methodology
 
 - **Batch ASR (GPU, twice a day in the pilot):** two steps.
   - **Step 1, transcription (in place):** recordings are sent to the fine-tuned Chichewa Whisper

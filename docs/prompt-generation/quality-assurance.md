@@ -1,4 +1,4 @@
-# Prompt-generation quality assurance
+# Prompt Quality Assurance
 
 Adapted from ZaZo AI Ltd (2026), *Chichewa Speech Project: Prompt Generation and Review Manual*, §7 (pp. 13–14), with existing importer checks identified separately. This is prompt QA; accepted recording quality is a separate collection step.
 

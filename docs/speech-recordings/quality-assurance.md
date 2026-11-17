@@ -1,4 +1,4 @@
-# Recording quality assurance
+# Recording Quality Assurance
 
 ## Quality-control protocol
 

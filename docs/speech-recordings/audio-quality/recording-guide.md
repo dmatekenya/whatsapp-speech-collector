@@ -1,4 +1,4 @@
-# Recording test clips for quality checks
+# Recording Test Clips for Quality Checks
 
 Last updated: 2026-11-11. For the speakers. Part of the audio-quality experiments
 ([handover.md](handover.md)).

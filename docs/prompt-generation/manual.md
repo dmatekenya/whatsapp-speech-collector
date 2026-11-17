@@ -1,4 +1,4 @@
-# Prompt-generation manual
+# Guide for Annotators
 
 Adapted from ZaZo AI Ltd (2026), *Chichewa Speech Project: Prompt Generation and Review Manual*, supplied as `prompt-generation-guide-v2.pdf`, §§2–6 (pp. 1–13). Platform workflows below describe the guide's intended process. The technical handover section documents existing importer behavior.
 

@@ -1,4 +1,4 @@
-# Transcription manual
+# Transcription Manual
 
 **Status: stub — approved human transcription instructions are not yet available.**
 

@@ -1,4 +1,4 @@
-# Recording targets and collection runs
+# Recording Targets and Collection Runs
 
 - **One fixed target per participant per run**, set as recorded minutes in the configuration
   (`per_participant`), with a fixed **split** across task types. Current split: 30% sentences, 25%

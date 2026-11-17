@@ -1,4 +1,4 @@
-# Audio quality experiments: handover
+# Audio Quality Experiments: Handover
 
 Last updated: 2026-11-11. Owner: Ange.
 

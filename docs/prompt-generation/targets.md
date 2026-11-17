@@ -1,4 +1,4 @@
-# Prompt targets
+# Prompt Targets
 
 Source: ZaZo AI Ltd (2026), *Chichewa Speech Project: Prompt Generation and Review Manual*, supplied as `prompt-generation-guide-v2.pdf`. Page numbers below refer to the printed PDF pages. These documents adapt the guide; they do not establish that the described annotation platform is already implemented.
 

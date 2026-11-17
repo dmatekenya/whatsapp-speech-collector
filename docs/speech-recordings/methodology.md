@@ -1,4 +1,4 @@
-# Speech-recording methodology
+# Speech-recording Methodology
 
 ## Participants
 

@@ -1,4 +1,4 @@
-# Decision log
+# Decision Log
 
 | Date | Decision |
 |---|---|

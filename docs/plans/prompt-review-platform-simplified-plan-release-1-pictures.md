@@ -4,7 +4,7 @@ Nov 15, 2026 · @Dunstan
 
 ## What we are building
 
-A browser screen where annotators label a sample of candidate prompts: whether each is usable, its domain and its topic. Supervisors check a sample of the labels. The labels are exported as a CSV that Dunstan uses to build the release folders he imports into the live `prompts` table with the existing importer.
+A browser screen where annotators label a sample of candidate prompts: whether each is usable, its domain and its topic. About 10% of pictures are labelled by two annotators, and disagreements are settled by a supervisor or coordinator. The labels are exported as a CSV that Dunstan uses to build the release folders he imports into the live `prompts` table with the existing importer.
 
 We build it in three releases. **Release 1 is pictures only**, and it must work on its own before we start the others:
 
@@ -26,8 +26,8 @@ The rest of this plan covers Release 1.
 
 1. **Register a batch.** Dunstan places a batch in `data/prompts/images/review/<batch>/`: images named `<candidate_id>.jpg` (longest side at most 1,280 px), a `manifest.csv`, and a `READY` file written last. The platform registers the batch from `manifest.csv` once `READY` exists. The `candidate_id` is the picture's ID everywhere, from harvest to export. Re-registering the same batch must not create duplicates.
 2. **Check files automatically.** Readable JPEG, and an exact-duplicate check by file hash against other candidates and live images.
-3. **Annotators label.** Each annotator gets the next unlabelled picture; two annotators never get the same picture by accident. Labelling has three steps: usable, domain, topic (see the review screen below).
-4. **Supervisor checks.** A random 10% of each annotator's labels, plus every flagged item. The supervisor confirms or corrects; a correction is a new record, not an edit.
+3. **Annotators label.** Each annotator gets the next unlabelled picture. About 10% of pictures (the `overlap_rate` setting) are chosen at random for **overlap**: each goes to exactly two different annotators, and neither sees the other's label. Every other picture goes to one annotator only, never two by accident. Labelling has three steps: usable, domain, topic (see the review screen below).
+4. **Disagreements and checks.** When the two labels on an overlap picture disagree (on usable, domain or topic), the picture goes to a supervisor or coordinator, who records the final decision. Every flagged item also goes to them. In the first days only, a supervisor spot-checks 5% of each annotator's first 100 labels, to catch shared misreadings of the rules early. Decisions and corrections are new records, never edits.
 5. **Export labels.** A command or button writes a snapshot of all saved labels to `review/<batch>/labels/labels-<YYYY-MM-DD>.csv`. It can be run at any time, not only at the end, so model work can start on early labels.
 6. **Release (Dunstan).** Dunstan builds the release folders for the existing importer from the exported labels and runs the import (dry run first). The platform does not copy images into `pictures_all/`.
 
@@ -45,7 +45,7 @@ Batches are a **sample**, not every picture: the first batch is about 3,000 pict
 | `licence`, `licence_url`, `creator`, `source_url` | attribution details, shown read-only |
 | `title`, `query_domain`, `country`, `region_signal` | context for Dunstan; **not shown to annotators** |
 
-**`labels-<date>.csv`** (one row per labelled picture, latest decision, written by the platform):
+**`labels-<date>.csv`** (one row per label, written by the platform). An overlap picture has two annotator rows, plus an adjudication row when they disagreed:
 
 | Column | Values |
 | --- | --- |
@@ -58,8 +58,10 @@ Batches are a **sample**, not every picture: the first batch is about 3,000 pict
 | `topic_other_text` | free text, when the topic is `other` |
 | `flagged`, `flag_note` | escalations |
 | `annotator` | pseudonymous annotator ID, never a name |
+| `overlap` | `yes` if the picture was sent to two annotators, else `no` |
+| `label_role` | `annotator`, or `adjudication` for the supervisor's or coordinator's final decision on a disagreement (the `annotator` column then holds their ID) |
 | `labelled_at` | timestamp |
-| `supervisor_status` | `not-checked`, `confirmed` or `corrected` |
+| `supervisor_status` | `not-checked`, `confirmed` or `corrected`, from the early spot checks only |
 
 ## The review screen
 
@@ -95,7 +97,7 @@ These come from what we learned building the supervision dashboard.
 | Dunstan / Ange | Build labelling batches (images, manifest, READY); maintain `config/domains.yaml`; write migrations, roles and grants; build release folders and run imports; review Stewart's changes |
 | Stewart | Review screen, gateway endpoints, batch registration, labels export, and tests |
 | Gloria / Evance (coordinators) | Assign work, resolve unclear cases, review *Other* topic notes |
-| Supervisors | 10% sample checks, flagged items, feedback to annotators |
+| Supervisors | Settle disagreements on overlap pictures, handle flagged items, early spot checks, feedback to annotators |
 | Annotators | Decide whether pictures are usable; choose domain and topic |
 
 ## Decisions needed before building
@@ -108,16 +110,18 @@ These are for Dunstan and Ange to settle; Stewart builds against the answers.
 - [ ] **Topic list:** being agreed by Dunstan and Ange; it will arrive in `config/domains.yaml`.
 - [ ] **Where the screen runs:** a new area in the Hostinger PHP site, or a page served from the droplet. Either way, data stays in Postgres.
 - [ ] **API contract:** gateway endpoints for batch registration, next picture, saving a label and the labels export, using the formats above.
+- [ ] **Overlap rate:** 10% of pictures go blind to two annotators, replacing a random supervisor sample. A setting, so it can change per batch.
 
 ## Release 1 is done when
 
 - [ ] Two annotators can work at the same time without getting the same picture.
+- [ ] About 10% of pictures reach two different annotators, blind; when their labels disagree, the picture reaches a supervisor or coordinator, and their decision appears in the export as an adjudication row.
 - [ ] Re-registering a batch or double-clicking Save creates no duplicates.
 - [ ] The labels export can be run at any time and contains every saved label with its `candidate_id`.
-- [ ] A test batch goes all the way: review folder → labelling → supervisor check → labels export → Dunstan's import → shown by the bot.
+- [ ] A test batch goes all the way: review folder → labelling (with overlap) → adjudication of a disagreement → labels export → Dunstan's import → shown by the bot.
 - [ ] The screen works on phone and desktop.
 - [ ] Recording supervision and the WhatsApp bot still work as before.
 
 ## Not in Release 1
 
-Conversation starters, sentence review, inter-annotator agreement assignments, automated publishing, payment tracking and model-based labelling of unreviewed pictures come later, each as a separate change. Sentences and conversation starters will use the same domain and topic list. Sentence review will also need decisions on numbers in sentences and on the political (`ndale`) starters.
+Conversation starters, sentence review, automated publishing, payment tracking and model-based labelling of unreviewed pictures come later, each as a separate change. Sentences and conversation starters will use the same domain and topic list. Sentence review will also need decisions on numbers in sentences and on the political (`ndale`) starters.

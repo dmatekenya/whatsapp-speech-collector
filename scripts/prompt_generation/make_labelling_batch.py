@@ -1,4 +1,4 @@
-"""Build a picture labelling batch for the review platform.
+"""Build a picture or sentence labelling batch for the review platform.
 
 Samples pictures from a harvest run (kept candidates) and the Dollar Street download,
 copies them into one folder named by candidate_id, and writes manifest.csv. The READY
@@ -10,7 +10,11 @@ Example (from the repo root):
         --dollar-street data/prompts/images/sources/dollar-street \
         --batch 2026-11-labelling-1 --size 3000
 
-Output: data/prompts/images/review/<batch>/  (images, manifest.csv, READY)
+Sentence example:
+    uv run python -m scripts.prompt_generation.make_labelling_batch \
+        --kind sentences --pool-id text-v2 --batch 2026-11-sentence-review --size 3000
+
+Output goes under data/prompts/images/review or data/prompts/text/review.
 """
 
 from __future__ import annotations
@@ -193,22 +197,46 @@ def _copy_image(src: Path, dest: Path, max_side: int) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--harvest-run", type=Path, required=True)
+    p.add_argument("--kind", choices=("pictures", "sentences"), default="pictures")
+    p.add_argument("--harvest-run", type=Path)
+    p.add_argument("--pool-id")
+    p.add_argument("--live-sample", type=int, default=0)
     p.add_argument("--dollar-street", type=Path)
     p.add_argument("--batch", required=True, help="batch name, e.g. 2026-11-labelling-1")
     p.add_argument("--size", type=int, default=3000)
     p.add_argument("--min-per-stratum", type=int, default=100)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--max-side", type=int, default=1280, help="shrink larger images to this")
-    p.add_argument("--review-root", type=Path, default=Path("data/prompts/images/review"))
+    p.add_argument("--review-root", type=Path)
     args = p.parse_args(argv)
+
+    if args.kind == "sentences":
+        from src.prompt_generation.text.labels import load_label_settings
+        from src.prompt_generation.text.pool import POOL_ROOT, TEXT_ROOT, named_directory
+        from src.prompt_generation.text.review import write_sentence_batch
+
+        if not args.pool_id:
+            p.error("--pool-id is required for sentence batches")
+        if args.size < 0 or args.live_sample < 0:
+            p.error("--size and --live-sample must be non-negative")
+        try:
+            write_sentence_batch(
+                named_directory(POOL_ROOT, args.pool_id),
+                named_directory(args.review_root or TEXT_ROOT / "review", args.batch),
+                load_label_settings(), size=args.size, live_sample=args.live_sample, seed=args.seed,
+            )
+        except (FileExistsError, ValueError) as exc:
+            p.error(str(exc))
+        return 0
+    if not args.harvest_run:
+        p.error("--harvest-run is required for picture batches")
 
     items = load_harvest(args.harvest_run)
     ds = load_dollar_street(args.dollar_street) if args.dollar_street else []
     print(f"pool: {len(items)} harvest + {len(ds)} Dollar Street = {len(items) + len(ds)}")
     picked = sample(items + ds, args.size, args.min_per_stratum, args.seed)
 
-    out = args.review_root / args.batch
+    out = (args.review_root or Path("data/prompts/images/review")) / args.batch
     write_batch(picked, out, args.max_side)
     counts = defaultdict(int)
     for it in picked:

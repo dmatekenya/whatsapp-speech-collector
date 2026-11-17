@@ -16,9 +16,13 @@ import argparse
 import logging
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 from src.prompt_generation.text.domains import load_domain_settings, run_domains
 from src.prompt_generation.text.extract import load_config, run_extraction
+from src.prompt_generation.text.labels import load_label_settings, run_labels
+from src.prompt_generation.text.pool import POOL_ROOT, build_pool, named_directory
+from src.prompt_generation.text.review import write_gaps
 from src.prompt_generation.text.sentences import load_sentence_settings, run_sentences
 
 try:
@@ -41,7 +45,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         stage = sub.add_parser(name, help=help_text)
         stage.add_argument("--run-id", required=True)
         stage.add_argument("-v", "--verbose", action="store_true")
-    return p.parse_args(argv)
+    pool = sub.add_parser("pool", help="combine live prompts and kept reading units")
+    pool.add_argument("--pool-id", required=True)
+    pool.add_argument("--live", type=Path, required=True)
+    pool.add_argument("--run-id", required=True)
+    label = sub.add_parser("label", help="suggest provisional domains and topics (OpenRouter)")
+    label.add_argument("--pool-id", required=True)
+    label.add_argument("--limit", type=int)
+    label.add_argument("--seed", type=int, default=42)
+    gaps = sub.add_parser("gaps", help="report collection gaps by domain and counts by topic")
+    gaps.add_argument("--pool-id", required=True)
+
+    args = p.parse_args(argv)
+    if args.command == "label" and args.limit is not None and args.limit < 0:
+        p.error("--limit must be non-negative")
+    return args
 
 
 def format_summary(run: dict) -> str:
@@ -93,12 +111,9 @@ def format_domains_summary(summary: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
+        level=logging.INFO if getattr(args, "verbose", False) else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
-    if load_dotenv:
-        load_dotenv()
-
     if args.command == "extract":
         config = load_config()
         if args.ocr_workers is not None:
@@ -107,9 +122,19 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "sentences":
         run = run_sentences(run_id=args.run_id, settings=load_sentence_settings())
         print(format_sentences_summary(run))
-    else:
+    elif args.command == "domains":
+        if load_dotenv:
+            load_dotenv()
         summary = run_domains(run_id=args.run_id, settings=load_domain_settings())
         print(format_domains_summary(summary))
+    elif args.command == "pool":
+        run = named_directory(load_sentence_settings().sentences_root, args.run_id)
+        build_pool(args.live, run / "sentences-kept.csv", named_directory(POOL_ROOT, args.pool_id))
+    elif args.command == "label":
+        run_labels(named_directory(POOL_ROOT, args.pool_id), load_label_settings(),
+                   limit=args.limit, seed=args.seed)
+    elif args.command == "gaps":
+        write_gaps(named_directory(POOL_ROOT, args.pool_id), load_label_settings())
     return 0
 
 

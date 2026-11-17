@@ -154,3 +154,27 @@ temperature: 0
 max_tokens: 2000
 timeout_seconds: 60
 max_retries: 3
+
+# =========================
+# SENTENCE POOL AND LABELLING
+# =========================
+topics_config: config/topics-draft.yaml
+# Published OpenRouter rates per million tokens for the stage 3 model.
+# https://openrouter.ai/anthropic/claude-haiku-5.5
+label_input_usd_per_million: 0.10
+label_output_usd_per_million: 0.50
+
+# Collection manual, Table 6 (9,000 sentences).
+domain_targets:
+  family: 1350
+  food: 1080
+  health: 1080
+  agriculture: 990
+  work-trade: 900
+  education: 900
+  transport: 630
+  sport-leisure: 630
+  nature: 540
+  technology: 360
+  culture: 360
+  public-services: 180

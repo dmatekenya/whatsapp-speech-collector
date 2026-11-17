@@ -253,11 +253,40 @@ def test_old_photos_dropped_undated_kept(cfg):
 
 def test_location_any_keeps_photos_without_malawi_signal(cfg):
     tech = make_candidate(source_id="1", query_domain="technology", tags=["Phones in Kenya"])
-    food = make_candidate(source_id="2", query_domain="food", tags=["Food in Kenya"],
+    food = make_candidate(source_id="2", query_domain="food", tags=["Food in Germany"],
                           image_url="https://example.org/2.jpg")
     filters.apply_metadata_filters([tech, food], cfg)
     assert tech.status == "kept" and tech.malawi_signal == "none"
-    assert food.drop_reason == "no_malawi_signal"
+    assert food.drop_reason == "no_region_signal"
+
+
+@pytest.mark.parametrize("signal", [
+    dict(tags=["Market in Zambia"]),
+    dict(tags=[], title="Fetching water in rural Tanzania"),
+    dict(tags=[], lat=-1.3, lon=36.8),  # Nairobi: geotag outside Malawi, inside the Africa box
+])
+def test_africa_location_keeps_africa_signal(cfg, signal):
+    c = make_candidate(query_domain="work-trade", **signal)
+    filters.apply_metadata_filters([c], cfg)
+    assert c.region_signal == "africa" and c.malawi_signal == "none"
+    assert c.status == "kept"
+
+
+def test_africa_location_drops_european_photo(cfg):
+    europe = make_candidate(query_domain="food", tags=["Bakery in Paris"], lat=48.85, lon=2.35)
+    filters.apply_metadata_filters([europe], cfg)
+    assert europe.region_signal == "none"
+    assert europe.drop_reason == "no_region_signal"
+
+
+def test_culture_still_requires_malawi(cfg):
+    africa_only = make_candidate(source_id="1", query_domain="culture", tags=["Wedding in Zambia"])
+    malawi = make_candidate(source_id="2", query_domain="culture",
+                            image_url="https://example.org/2.jpg")
+    filters.apply_metadata_filters([africa_only, malawi], cfg)
+    assert africa_only.region_signal == "africa"
+    assert africa_only.drop_reason == "no_malawi_signal"
+    assert malawi.status == "kept" and malawi.region_signal == "malawi"
 
 # ==============
 # DIVERSITY CAPS

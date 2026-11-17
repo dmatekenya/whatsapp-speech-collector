@@ -41,8 +41,15 @@ See the [API reference](https://api.openverse.org/v1/) and
 
 1. Search each domain's queries (`config/prompt-generation.yaml`), metadata only.
 2. Drop: non-open or non-commercial licences (unless `allow_non_commercial: true`),
-   unwanted file types, maps/logos/scans, images under 800x600, and anything with no
-   Malawi signal (geotag inside Malawi, or Malawi place name in categories/title/description).
+   unwanted file types, maps/logos/scans, images under 800x600, and anything without the
+   signal its domain's `location` requires:
+   - `malawi` (default): a Malawi signal (geotag inside Malawi, or Malawi place name in
+     categories/title/description).
+   - `africa`: a Malawi signal or an Africa signal (geotag inside `africa_bbox`, or an
+     African country name, demonym, "africa" or "african" in categories/title/description).
+   - `any`: no requirement.
+   The `region_signal` column records `malawi`, `africa` or `none`; a Malawi signal takes
+   precedence over an Africa signal.
 3. Drop exact duplicates (same source image or same file URL).
 4. Cap each creator at `max_per_creator_day` photos per day (default 3), then
    `max_per_creator_domain` per domain (default 20), within each source, keeping search order.
@@ -69,9 +76,11 @@ flickr:
   `media=photos`, `content_type=1`, `sort=date-posted-desc` and `per_page=250`.
   It returns every matching candidate as `query_domain=unassigned`. Oversized searches
   are split into non-overlapping inclusive upload-date intervals until each has at most
-  4,000 results; newer intervals are retrieved first. The upper upload date is frozen at
-  run start. If a single upload second still exceeds 4,000, the sweep fails explicitly
-  rather than silently returning incomplete results.
+  4,000 results; newer intervals are retrieved first. The upper upload date is the start of the current UTC day, so same-day reruns
+  reuse cached search pages. Empty or short pages end each range even when Flickr
+  estimates a larger total. If a single upload second still exceeds 4,000, the sweep fails explicitly
+  rather than silently returning incomplete results; harvest logs the sweep failure and
+  continues with the other searches.
 - `text` runs for each selected domain query, preserving the query text exactly, without
   a bbox or `has_geo` constraint. `--limit-per-query` applies. Malawi relevance is assessed
   from returned metadata through the common geo/tag/title/description checks.

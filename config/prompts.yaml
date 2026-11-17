@@ -19,11 +19,9 @@ prompt_types:
     id_prefix: S
     id_width: 5
     sequence: prompt_sentence_id_seq
-    # Sentence length in words. Inside target_words: imported as is. Outside
-    # it but inside hard_limit_words: imported with flags.length = short or
-    # long, and listed as a warning. Outside hard_limit_words: rejected.
-    target_words: [8, 25]
-    hard_limit_words: [3, 50]
+    # One word range for paragraphs, sentence groups and single sentences.
+    target_words: [15, 55]
+    hard_limit_words: [15, 55]
     allow_digits: false
     # Besides letters and spaces, only these characters are allowed.
     check_characters: true

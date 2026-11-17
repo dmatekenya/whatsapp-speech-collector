@@ -1,0 +1,97 @@
+# ====================
+# DRAFT TOPICS BY DOMAIN
+# ====================
+# Provisional list (74 topics) from the "Picture topics by domain" draft, 2026-11-17.
+# Not yet agreed by Dunstan and Ange. Used for provisional model predictions only.
+# When agreed, this moves into config/domains.yaml and this file is deleted.
+# Keys are lowercase with hyphens. "other" is always allowed, with a short suggested topic.
+
+version: draft-2026-11-17
+
+topics:
+  family:
+    household-chores: {label: Household chores, covers: "Sweeping, washing clothes or dishes, tidying the home and yard"}
+    caring-for-children: {label: Caring for children, covers: "Feeding, carrying, dressing or bathing children"}
+    family-time: {label: Family time together, covers: "Family members sitting, talking or relaxing together at home"}
+    elders: {label: Elders and grandparents, covers: "Grandparents and older relatives with the family"}
+    friends-neighbours: {label: Friends and neighbours, covers: "Friends chatting, visiting, walking together"}
+    community-cooperation: {label: Community cooperation, covers: "Neighbours working together, helping each other, informal gatherings"}
+  food:
+    preparing-ingredients: {label: Preparing ingredients, covers: "Peeling, pounding maize, sorting beans, cutting vegetables"}
+    cooking: {label: Cooking, covers: "Cooking nsima or relish on a fire, charcoal or stove"}
+    eating-meal: {label: Eating a meal, covers: "People eating or sharing food"}
+    food-dishes: {label: Food and dishes, covers: "Cooked dishes, fruit, vegetables, fish shown as food (not for sale)"}
+    preserving-food: {label: Preserving food, covers: "Drying fish or vegetables, smoking, storing cooked food"}
+    kitchen-utensils: {label: Kitchen and utensils, covers: "Kitchens, pots, mortar and pestle, cooking places"}
+  health:
+    clinic-hospital: {label: At a clinic or hospital, covers: "Waiting areas, consultations, health facility buildings"}
+    health-workers: {label: Health workers, covers: "Nurses, doctors, community health workers at work"}
+    hygiene: {label: Hygiene, covers: "Hand washing, bathing, brushing teeth"}
+    toilets-sanitation: {label: Toilets and sanitation, covers: "Latrines, toilets, hand-washing stations"}
+    preventing-illness: {label: Preventing illness, covers: "Mosquito nets, vaccination, clean water at home"}
+    exercise-wellbeing: {label: Exercise and wellbeing, covers: "Exercising, resting, staying healthy"}
+  agriculture:
+    planting: {label: Preparing land and planting, covers: "Clearing, ridging, sowing seed"}
+    tending-crops: {label: Tending crops, covers: "Weeding, watering, applying fertiliser"}
+    harvesting: {label: Harvesting, covers: "Picking, cutting or digging up crops"}
+    storing-crops: {label: Drying and storing crops, covers: "Drying maize, shelling, granaries, sacks"}
+    cash-crops: {label: Cash crops and estates, covers: "Tobacco, tea, cotton, sugar cane fields and estates"}
+    livestock: {label: Keeping livestock, covers: "Goats, cattle, chickens, pigs and their care"}
+    fishing: {label: Fishing, covers: "Fishing boats, nets, landing the catch"}
+  work-trade:
+    market-selling: {label: Selling at a market or stall, covers: "Vendors at markets and roadside stalls, any goods including food"}
+    shopping: {label: Shopping and buying, covers: "Customers buying in markets, shops and kiosks"}
+    crafts-trades: {label: Crafts and trades, covers: "Tailoring, carpentry, metalwork, pottery or weaving made to sell"}
+    repairs-services: {label: Repairs and services, covers: "Bicycle repair, hairdressing, shoe repair"}
+    construction-labour: {label: Construction and manual work, covers: "Building, brick making, carrying materials, labouring"}
+    money-saving: {label: Money and saving, covers: "Counting money, savings group meetings, banks"}
+    office-work: {label: Office and professional work, covers: "People at work in offices or workplaces"}
+  education:
+    classroom: {label: Lessons in a classroom, covers: "Teachers and pupils in class"}
+    learning-outdoors: {label: Learning outdoors, covers: "Lessons under a tree or in the open"}
+    going-to-school: {label: Going to school, covers: "Walking to or from school, school grounds, break time"}
+    reading-studying: {label: Reading and studying, covers: "Homework, reading, libraries"}
+    training: {label: Training and adult learning, covers: "Vocational courses, adult literacy, workshops"}
+  transport:
+    minibus-bus: {label: Minibuses and buses, covers: "Minibuses, buses, bus stations, passengers boarding"}
+    bicycles-taxis: {label: Bicycles and bike taxis, covers: "Bicycles, kabaza and motorbike taxis"}
+    walking-carrying: {label: Walking and carrying loads, covers: "Walking to places, carrying goods on the head or back"}
+    roads-traffic: {label: Roads and traffic, covers: "Roads, bridges, junctions, traffic"}
+    cars-lorries: {label: Cars and lorries, covers: "Cars, pick-ups, lorries moving goods"}
+    boats-ferries: {label: Boats and ferries, covers: "Boats and ferries used for travel"}
+  sport-leisure:
+    football: {label: Football, covers: "Playing or watching football"}
+    other-sports: {label: Other sports, covers: "Netball, athletics, volleyball and other sports"}
+    childrens-games: {label: "Children's games and toys", covers: "Skipping, home-made toys, playground games"}
+    board-games: {label: Board and table games, covers: "Bawo, draughts, cards"}
+    music: {label: Music for entertainment, covers: "Bands, singers, playing instruments for fun"}
+    dancing: {label: Dancing for fun, covers: "Social dancing, parties (not ceremonial dance)"}
+    watching-media: {label: Watching TV and videos, covers: "Groups watching television or videos"}
+  nature:
+    landscapes: {label: Landscapes, covers: "Mountains, hills, plains, views of the countryside"}
+    lakes-rivers: {label: Lakes and rivers, covers: "Lake shores, rivers, streams, wetlands"}
+    weather-seasons: {label: Weather and seasons, covers: "Rain, storms, floods, dry season, clouds"}
+    trees-plants: {label: Trees and plants, covers: "Baobabs, forests, flowers, wild plants"}
+    wild-animals: {label: Wild animals, covers: "Wildlife and birds (not livestock)"}
+    waste-environment: {label: Waste and the environment, covers: "Rubbish, pollution, tree planting, cutting trees, charcoal burning"}
+  technology:
+    mobile-phones: {label: Using a mobile phone, covers: "Calling, messaging, recording voice notes"}
+    mobile-money: {label: Mobile money, covers: "Mobile money agents and transactions"}
+    radio-tv: {label: Radio and television sets, covers: "Listening to the radio for news, TV sets and antennas"}
+    computers-internet: {label: Computers and internet, covers: "Computers, laptops, internet cafés"}
+    solar-electricity: {label: Solar power and electricity, covers: "Solar panels, charging, electric lights, power lines"}
+    phone-services: {label: Phone repair and charging, covers: "Phone repair stalls, charging kiosks"}
+  culture:
+    weddings-celebrations: {label: Weddings and celebrations, covers: "Weddings, chinkhoswe, festive gatherings"}
+    traditional-dance: {label: Traditional and ceremonial dance, covers: "Gule Wamkulu, Ingoma, Tchopa and other ceremonial dances"}
+    religious-life: {label: Religious life, covers: "Church and mosque services, choirs, prayer"}
+    traditional-clothing: {label: Traditional clothing, covers: "Chitenje, festive and traditional dress"}
+    ceremonies-rites: {label: Ceremonies and rites, covers: "Initiation, installation of chiefs, funerals and memorials"}
+    heritage: {label: Heritage and oral tradition, covers: "Traditional houses and crafts as heritage, elders telling stories"}
+  public-services:
+    water-points: {label: Water points, covers: "Boreholes, taps, wells and people collecting water"}
+    public-buildings: {label: Public buildings, covers: "District offices, post offices, courts"}
+    police-security: {label: Police and security, covers: "Police officers, police stations"}
+    community-meetings: {label: Community and village meetings, covers: "Meetings with chiefs or officials, public announcements"}
+    public-events: {label: Public events and campaigns, covers: "Vaccination days, voter registration, public celebrations"}
+    public-works: {label: Public works, covers: "Road repairs, building schools or clinics, community projects"}

@@ -11,21 +11,21 @@ from src.storage.models import Prompt
 
 HEADER = ["text", "source", "domain"]
 
-# Sentences inside the 8-25 word target, so they import without flags.
-S1 = "Moni, muli bwanji lero kuno ku mudzi kwathu?"
-S2 = "Ana akusewera panja pafupi ndi sukulu ya pulayimale lero."
-S3 = "Mvula yagwa kwambiri lero ndipo alimi ali okondwa kwambiri."
-S4 = "Tiwonana mawa m'mawa ku msika wa tauni ya Zomba."
-S5 = "Zikomo kwambiri chifukwa cha thandizo lanu lonse pa ntchito iyi."
+# Sentences inside the 15-55 word range, so they import without length flags.
+S1 = "Moni, muli bwanji lero kuno ku mudzi kwathu ndipo kodi ana anu onse ali bwino?"
+S2 = "Ana akusewera panja pafupi ndi sukulu ya pulayimale lero pamene makolo awo akugwira ntchito kumunda."
+S3 = "Mvula yagwa kwambiri lero ndipo alimi ali okondwa kwambiri chifukwa minda yawo inali youma kale."
+S4 = "Tiwonana mawa m'mawa ku msika wa tauni ya Zomba kumene tidzagula chakudya cha banja lathu."
+S5 = "Zikomo kwambiri chifukwa cha thandizo lanu lonse pa ntchito iyi yomwe yathandiza anthu ambiri kumudzi."
 
 
 def words(n: int) -> str:
     return " ".join(["mawu"] * n)
 
 
-# ============================================================
-# Helpers
-# ============================================================
+# =======
+# HELPERS
+# =======
 @pytest.fixture(scope="module")
 def rules() -> SentenceRules:
     return SentenceRules(load_config(DEFAULT_CONFIG).options["prompt_types"]["sentences"])
@@ -55,9 +55,9 @@ def prompts() -> list[Prompt]:
         return list(session.scalars(select(Prompt).order_by(Prompt.id)))
 
 
-# ============================================================
-# Text rules
-# ============================================================
+# ==========
+# TEXT RULES
+# ==========
 def test_normalized_text(rules: SentenceRules) -> None:
     assert rules.normalize("Moni, muli bwanji?") == "moni, muli bwanji"
     assert rules.normalize("  MONI,   muli bwanji ") == "moni, muli bwanji"
@@ -71,8 +71,8 @@ def test_domain_normalized() -> None:
 
 
 def test_sentence_rules(rules: SentenceRules) -> None:
-    assert rules.clean("Ŵana  akuŵerenga buku.") == "Ŵana akuŵerenga buku."
-    assert rules.clean('Iye anati: "Inde, ndi’ye!"') == 'Iye anati: "Inde, ndi’ye!"'
+    assert rules.clean("Ŵana  akuŵerenga buku. " + words(12)) == "Ŵana akuŵerenga buku. " + words(12)
+    assert rules.clean('Iye anati: "Inde, ndi’ye!" ' + words(11)) == 'Iye anati: "Inde, ndi’ye!" ' + words(11)
     with pytest.raises(ValueError, match="contains digits"):
         rules.clean("Ana 3 akusewera panja.")
     with pytest.raises(ValueError, match="aren't allowed: '#' '@'"):
@@ -80,22 +80,18 @@ def test_sentence_rules(rules: SentenceRules) -> None:
 
 
 def test_hard_word_limits(rules: SentenceRules) -> None:
-    assert rules.clean(words(3)) and rules.clean(words(50))
-    with pytest.raises(FieldError, match=r"has 2 word\(s\) \(min 3\)") as error:
-        rules.clean(words(2))
-    assert error.value.reasons == ["fewer than 3 words"]
-    with pytest.raises(FieldError, match=r"has 51 words \(max 50\)") as error:
-        rules.clean(words(51))
-    assert error.value.reasons == ["more than 50 words"]
+    assert rules.clean(words(15)) and rules.clean(words(55))
+    with pytest.raises(FieldError, match=r"has 14 word\(s\) \(min 15\)") as error:
+        rules.clean(words(14))
+    assert error.value.reasons == ["fewer than 15 words"]
+    with pytest.raises(FieldError, match=r"has 56 words \(max 55\)") as error:
+        rules.clean(words(56))
+    assert error.value.reasons == ["more than 55 words"]
 
 
-def test_length_flag_outside_target(rules: SentenceRules) -> None:
-    assert rules.length_flag(words(3)) == "short"
-    assert rules.length_flag(words(7)) == "short"
-    assert rules.length_flag(words(8)) is None
-    assert rules.length_flag(words(25)) is None
-    assert rules.length_flag(words(26)) == "long"
-    assert rules.length_flag(words(50)) == "long"
+def test_no_length_flags_inside_sentence_range(rules: SentenceRules) -> None:
+    for count in (15, 25, 40, 55):
+        assert rules.length_flag(words(count)) is None
 
 
 @pytest.mark.parametrize(
@@ -113,7 +109,7 @@ def test_length_flag_outside_target(rules: SentenceRules) -> None:
 def test_line_breaks_joined(rules: SentenceRules, text: str, joined: str) -> None:
     assert rules.has_line_breaks(text)
     assert rules.join_lines(text) == joined
-    assert rules.clean(text) == joined
+    assert rules.clean(text + " " + words(15)) == joined + " " + words(15)
 
 
 def test_all_caps_words(rules: SentenceRules) -> None:
@@ -132,18 +128,18 @@ def test_every_broken_rule_is_reported(rules: SentenceRules) -> None:
     assert error.value.reasons == [
         "contains digits",
         "contains characters that aren't allowed: '/'",
-        "more than 50 words",
+        "more than 55 words",
     ]
 
 
-# ============================================================
-# Import
-# ============================================================
+# ======
+# IMPORT
+# ======
 def test_import_assigns_ids_dedupes_and_counts_domains(clean_db: None, tmp_path: Path) -> None:
     rows = [
         [S1, "dhs", "Health "],
         [S2, "dhs", "health"],
-        ["moni,  muli bwanji lero kuno ku mudzi   kwathu", "dhs", "Health"],  # dup of row 2
+        [S1.lower().replace(" ", "  ").rstrip("?"), "dhs", "Health"],  # dup of row 2
         [S3, "dhs", "Agriculture"],
     ]
 
@@ -162,7 +158,7 @@ def test_import_assigns_ids_dedupes_and_counts_domains(clean_db: None, tmp_path:
     first = stored[0]
     assert first.prompt_type == "sentence"
     assert first.text == S1
-    assert first.normalized_text == "moni, muli bwanji lero kuno ku mudzi kwathu"
+    assert first.normalized_text == S1.lower().rstrip("?")
     assert first.domain == "health"
     assert first.source_file == "batch.csv"
     assert first.active is True
@@ -189,42 +185,40 @@ def test_optional_columns_go_to_attributes(clean_db: None, tmp_path: Path) -> No
     assert prompts()[0].attributes == {"license": "CC-BY-4.0"}
 
 
-# ============================================================
-# Soft length rule
-# ============================================================
-def test_length_flags_stored_and_reported(clean_db: None, tmp_path: Path) -> None:
-    short = "Moni muli bwanji."  # 3 words
-    long = words(30)
+# ===================
+# LENGTH AND QC FLAGS
+# ===================
+def test_sentence_length_range_has_no_soft_flags(clean_db: None, tmp_path: Path) -> None:
+    lower = words(15)
+    upper = words(55)
     rows = [
-        [short, "dhs", "health"],
+        [lower, "dhs", "health"],
         [S1, "dhs", "health"],
-        [long, "dhs", "health"],
-        ["Moni bwanji.", "dhs", "health"],  # 2 words: below the hard limit
-        [words(51), "dhs", "health"],  # above the hard limit
+        [upper, "dhs", "health"],
+        [words(12), "dhs", "health"],
+        [words(56), "dhs", "health"],
     ]
 
     dry = run(write_csv(tmp_path, "lengths.csv", rows), dry_run=True)
-    assert dry.counts["flagged length=short"] == 1 and dry.counts["flagged length=long"] == 1
+    assert dry.counts["would import"] == 3 and dry.counts["rejected"] == 2
+    assert "flagged length=short" not in dry.counts and "flagged length=long" not in dry.counts
 
     report = run(write_csv(tmp_path, "lengths.csv", rows))
 
     assert report.counts["imported"] == 3 and report.counts["rejected"] == 2
     assert {p.text: p.flags for p in prompts()} == {
-        short: {"length": "short"},
+        lower: {},
         S1: {},
-        long: {"length": "long"},
+        upper: {},
     }
     assert all(p.active for p in prompts())
-    assert [(w.row, w.message) for w in report.warnings] == [
-        (2, "3 words, outside the target 8-25; imported with flag length=short"),
-        (4, "30 words, outside the target 8-25; imported with flag length=long"),
-    ]
+    assert report.warnings == []
     assert report.rejection_summary() == {
-        "text: fewer than 3 words": 1,
-        "text: more than 50 words": 1,
+        "text: fewer than 15 words": 1,
+        "text: more than 55 words": 1,
     }
     rendered = report.render()
-    assert "flagged length=short: 1" in rendered and "flagged length=long: 1" in rendered
+    assert "flagged length=" not in rendered
 
     # Re-importing flags nothing new: the prompts already exist.
     again = run(write_csv(tmp_path, "lengths.csv", rows))
@@ -234,12 +228,12 @@ def test_length_flags_stored_and_reported(clean_db: None, tmp_path: Path) -> Non
 def test_joined_lines_imported_flagged_and_checked_as_joined(
     clean_db: None, tmp_path: Path
 ) -> None:
-    multi = "Kodi munamvapo za njira iyi\r\n\r\nAmayi amaikidwa timachubu tiwiri pa mkono."
+    multi = "Kodi munamvapo za njira yabwino iyi\r\n\r\nAmayi amaikidwa timachubu tiwiri pa mkono wawo kumudzi lero."
     rows = [
         [multi, "dhs", "health"],
         [S1, "dhs", "health"],
         # The single-line form of row 2 once joined: a duplicate, so skipped.
-        ["Kodi munamvapo za njira iyi. Amayi amaikidwa timachubu tiwiri pa mkono.", "dhs", "health"],
+        ["Kodi munamvapo za njira yabwino iyi. Amayi amaikidwa timachubu tiwiri pa mkono wawo kumudzi lero.", "dhs", "health"],
         # Each line is short, but joined it's over the hard limit.
         [words(30) + "\n" + words(30), "dhs", "health"],
     ]
@@ -249,9 +243,9 @@ def test_joined_lines_imported_flagged_and_checked_as_joined(
     assert report.counts["imported"] == 2
     assert report.counts["flagged joined_lines"] == 1
     assert report.counts["skipped: duplicate in file"] == 1
-    assert report.rejection_summary() == {"text: more than 50 words": 1}
+    assert report.rejection_summary() == {"text: more than 55 words": 1}
     joined, plain = prompts()
-    assert joined.text == "Kodi munamvapo za njira iyi. Amayi amaikidwa timachubu tiwiri pa mkono."
+    assert joined.text == "Kodi munamvapo za njira yabwino iyi. Amayi amaikidwa timachubu tiwiri pa mkono wawo kumudzi lero."
     assert joined.flags == {"joined_lines": True}
     assert plain.flags == {}
     warning = next(w for w in report.warnings if w.row == 2)
@@ -260,8 +254,8 @@ def test_joined_lines_imported_flagged_and_checked_as_joined(
 
 
 def test_all_caps_imported_flagged_and_reported(clean_db: None, tmp_path: Path) -> None:
-    caps = "Tsopano NDIKUFUNA kuti mundiwerengere chiganizo ichi chonse bwino."
-    allowed = "Kodi munamvapo za matenda a HIV ndi AIDS kuno kwanu?"
+    caps = "Tsopano NDIKUFUNA kuti mundiwerengere chiganizo ichi chonse bwino " + words(7)
+    allowed = "Kodi munamvapo za matenda a HIV ndi AIDS kuno kwanu " + words(5)
     rows = [[caps, "dhs", "health"], [allowed, "dhs", "health"], [S1, "dhs", "health"]]
 
     report = run(write_csv(tmp_path, "caps.csv", rows))
@@ -275,26 +269,26 @@ def test_all_caps_imported_flagged_and_reported(clean_db: None, tmp_path: Path) 
 
 
 def test_flags_combine(clean_db: None, tmp_path: Path) -> None:
-    text = "Tsopano NDIKUFUNA\nmundiwerengere"
+    text = "Tsopano NDIKUFUNA\nmundiwerengere " + words(12)
     report = run(write_csv(tmp_path, "both.csv", [[text, "dhs", "health"]]))
 
-    assert prompts()[0].flags == {"joined_lines": True, "all_caps": True, "length": "short"}
+    assert prompts()[0].flags == {"joined_lines": True, "all_caps": True}
     assert report.counts["flagged joined_lines"] == 1
     assert report.counts["flagged all_caps"] == 1
-    assert report.counts["flagged length=short"] == 1
+    assert "flagged length=short" not in report.counts
 
 
-# ============================================================
-# Partial import and rejected rows
-# ============================================================
+# ================================
+# PARTIAL IMPORT AND REJECTED ROWS
+# ================================
 BAD_ROWS = [
     [S1, "dhs", "health"],
-    ["Ana 3 akusewera panja pafupi ndi sukulu yathu lero.", "dhs", "health"],
-    [words(51), "dhs", "health"],
-    ["Tumizani uthenga ku #nambala yathu lero masana ano.", "dhs", "health"],
-    ["Palibe gwero la chiganizo ichi pano lero kuno.", "", "health"],
+    ["Ana 3 akusewera panja pafupi ndi sukulu yathu lero. " + words(6), "dhs", "health"],
+    [words(56), "dhs", "health"],
+    ["Tumizani uthenga ku #nambala yathu lero masana ano. " + words(7), "dhs", "health"],
+    ["Palibe gwero la chiganizo ichi pano lero kuno. " + words(7), "", "health"],
     # Joined into one line first, then rejected for the '#'.
-    ["Kodi munamvapo za njira #iyi?\n\nAmayi amaikidwa timachubu tiwiri pa mkono.", "dhs", "health"],
+    ["Kodi munamvapo za njira #iyi?\n\nAmayi amaikidwa timachubu tiwiri pa mkono. " + words(4), "dhs", "health"],
     [S4, "dhs", "health"],
 ]
 
@@ -320,7 +314,7 @@ def test_partial_import_skips_invalid_rows_and_writes_rejected_file(
     ]
     assert report.rejection_summary() == {
         "text: contains digits": 1,
-        "text: more than 50 words": 1,
+        "text: more than 55 words": 1,
         "text: contains characters that aren't allowed: '#'": 2,
         "source: required value is missing": 1,
     }
@@ -334,7 +328,7 @@ def test_partial_import_skips_invalid_rows_and_writes_rejected_file(
     assert list(rejected[0]) == ["text", "source", "domain", "rejection_reason"]
     assert [row["rejection_reason"] for row in rejected] == [
         "text: contains digits",
-        "text: more than 50 words",
+        "text: more than 55 words",
         "text: contains characters that aren't allowed: '#'",
         "source: required value is missing",
         "text: contains characters that aren't allowed: '#'",
@@ -383,13 +377,13 @@ def test_strict_mode_imports_nothing(clean_db: None, tmp_path: Path) -> None:
 
 def test_strict_mode_allows_flagged_rows(clean_db: None, tmp_path: Path) -> None:
     # Flags are warnings, not errors: they never block a strict import.
-    report = run(write_csv(tmp_path, "flagged.csv", [[words(30), "dhs", "health"]]), strict=True)
+    report = run(write_csv(tmp_path, "flagged.csv", [["NDIKUFUNA " + words(14), "dhs", "health"]]), strict=True)
 
-    assert report.committed and prompts()[0].flags == {"length": "long"}
+    assert report.committed and prompts()[0].flags == {"all_caps": True}
 
 
 def test_dry_run_reports_counts_and_writes_no_files(clean_db: None, tmp_path: Path) -> None:
-    rows = [*BAD_ROWS, ["moni, muli bwanji lero kuno ku mudzi kwathu", "dhs", "health"]]
+    rows = [*BAD_ROWS, [S1.lower().rstrip("?"), "dhs", "health"]]
     report = run(write_csv(tmp_path, "bad.csv", rows), dry_run=True)
 
     assert report.counts["would import"] == 2

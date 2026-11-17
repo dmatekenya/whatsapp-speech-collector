@@ -33,6 +33,7 @@ class Candidate:
 
     # Filled by filters and checks
     malawi_signal: str = "none"   # geo | category | text | none
+    region_signal: str = "none"   # malawi | africa | none
     thumb_path: str = ""
     thumb_sha256: str = ""
     phash: str = ""

@@ -39,7 +39,7 @@ If several domains fit, select the main focus. Flag unresolved ambiguity rather 
 
 Review completeness, spelling, punctuation, spacing, grammar and natural Chichewa. A sentence must make sense on its own, fit the recording limits in [targets](targets.md) and avoid duplication. Correct obvious spelling, punctuation, spacing or extraction errors without changing meaning; consult the source for unclear extracted wording where available. Leave correct text unchanged. Reject unusable sentences with a reason and flag uncertainty. Assign the domain, check metadata and approve only the final corrected version (guide §6.1).
 
-The importer currently targets 8–25 words with hard limits of 3–50; out-of-target sentences within hard limits are flagged. Digits are disallowed. These technical checks do not establish language quality or reading duration.
+The importer accepts reading units of 15–55 words, with identical target and hard limits and no separate length flag. Extracted units may be a whole paragraph, a group of consecutive complete sentences or a single sentence. Digits are disallowed. These technical checks do not establish language quality or reading duration.
 
 ## Pictures
 

@@ -26,6 +26,30 @@ Speech type is derived from task type in `config/assignment_settings.yaml`. Sent
 7. The coordinator confirms batches for release after unresolved content and permission issues are settled. The data manager prepares and transfers approved prompts into the collection system. Preserve original content and review history.
 8. Monitor accepted recording duration, prompt reuse and domain coverage during collection. AI/NLP leads revisit estimates and assignment settings using observed results.
 
+## Extracted reading units
+
+The text pipeline prepares reading units of 15–55 words, using the same inclusive range for
+extraction and sentence imports, without a separate target-length flag. Valid paragraphs up to
+55 words stay whole. Longer paragraphs are split into complete sentences, then consecutive
+passing sentences from the same paragraph are grouped up to 40 words. A failed sentence ends
+the current group. Single sentences of 41–55 words remain standalone units; sentences over
+55 words are rejected. A final group under 15 words merges into the preceding group only if
+the combined unit fits within 55 words; otherwise it is rejected.
+
+OCR preparation rejects blocks containing an original line over 70 characters as likely merged
+columns, repairs whole-word `lye` to `Iye`, and removes underscore and stray `=` / `§` separators.
+Unit cleaning normalizes repeated internal quote marks to straight apostrophes, trailing
+ellipsis runs to one full stop, and unmatched boundary quotes before balance checking.
+Remaining quote imbalance, punctuation followed by a lowercase continuation, and other format,
+language and duplicate checks can reject units. OCR also checks mixed-case word noise and
+unknown words, allowing closing quotes after `. , ? !`. Kept units pass importer validation.
+
+Candidate records retain unit type, sentence count, document ID and block index alongside source
+provenance and rejection reasons. Model-suggested domains, confidence, model and scoring time
+are saved separately and merged by stable unit ID, so rerunning sentence preparation preserves
+existing scores. These suggestions do not replace human review. See the
+[text pipeline README](../../src/prompt_generation/text/README.md) for settings and output schemas.
+
 ## Picture content rules
 
 Real people and faces are allowed. Reject or flag pictures showing public figures (politicians or celebrities), political campaign events or party material. Reject or flag sensitive situations: patients receiving treatment, children in distress, funerals or grief, or people shown in a demeaning way. Keep the other criteria: no visible text, clear at phone size, culturally suitable and enough detail for a 15–30-second description. This project decision of 2026-11-15 supersedes the supplied guide’s restriction on real people.

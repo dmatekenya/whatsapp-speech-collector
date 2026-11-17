@@ -18,18 +18,19 @@ min_height: 480
 thumb_width: 512
 
 # Keep at most this many photos from the same creator on the same day (0 = no cap).
-max_per_creator_day: 10
+max_per_creator_day: 15
 # Keep at most this many photos from the same creator per domain (0 = no cap).
-max_per_creator_domain: 40
+max_per_creator_domain: 60
 
 # Near-duplicate threshold: maximum Hamming distance between perceptual hashes.
 phash_max_distance: 6
 
-# Licences
-# --------
+# ========
+# LICENCES
+# ========
 # Only openly licensed or public-domain images are kept. Set to true only if the project
 # is confirmed as non-commercial.
-allow_non_commercial: false
+allow_non_commercial: True
 
 # Flickr geo-sweep runs once per harvest; text runs per domain query.
 flickr:
@@ -43,8 +44,9 @@ http:
   max_retries: 4
   contact_email_env: HARVEST_CONTACT_EMAIL
 
-# Malawi relevance
-# ----------------
+# ================
+# REGION RELEVANCE
+# ================
 malawi_bbox:
   min_lat: -17.2
   max_lat: -9.3
@@ -85,6 +87,123 @@ malawi_place_names:
   - monkey bay
   - cape maclear
 
+# Africa-wide geotag box and place names (country names and demonyms). Used by the
+# "africa" location. Bare "guinea" is left out because it also matches Papua New Guinea.
+africa_bbox:
+  min_lat: -35
+  max_lat: 38
+  min_lon: -18
+  max_lon: 52
+
+africa_place_names:
+  - africa
+  - african
+  - africans
+  - algeria
+  - algerian
+  - angola
+  - angolan
+  - benin
+  - beninese
+  - botswana
+  - motswana
+  - burkina faso
+  - burkinabe
+  - burundi
+  - burundian
+  - cabo verde
+  - cape verde
+  - cameroon
+  - cameroonian
+  - central african republic
+  - chad
+  - chadian
+  - comoros
+  - comorian
+  - congo
+  - congolese
+  - democratic republic of the congo
+  - djibouti
+  - djiboutian
+  - egypt
+  - egyptian
+  - equatorial guinea
+  - equatorial guinean
+  - eritrea
+  - eritrean
+  - eswatini
+  - swaziland
+  - swazi
+  - ethiopia
+  - ethiopian
+  - gabon
+  - gabonese
+  - gambia
+  - gambian
+  - ghana
+  - ghanaian
+  - guinea-bissau
+  - guinean
+  - ivory coast
+  - ivorian
+  - kenya
+  - kenyan
+  - lesotho
+  - basotho
+  - liberia
+  - liberian
+  - libya
+  - libyan
+  - madagascar
+  - malagasy
+  - malawi
+  - malawian
+  - mali
+  - malian
+  - mauritania
+  - mauritanian
+  - mauritius
+  - mauritian
+  - morocco
+  - moroccan
+  - mozambique
+  - mozambican
+  - namibia
+  - namibian
+  - niger
+  - nigerien
+  - nigeria
+  - nigerian
+  - rwanda
+  - rwandan
+  - sao tome
+  - senegal
+  - senegalese
+  - seychelles
+  - seychellois
+  - sierra leone
+  - sierra leonean
+  - somalia
+  - somali
+  - south africa
+  - south african
+  - south sudan
+  - south sudanese
+  - sudan
+  - sudanese
+  - tanzania
+  - tanzanian
+  - togo
+  - togolese
+  - tunisia
+  - tunisian
+  - uganda
+  - ugandan
+  - zambia
+  - zambian
+  - zimbabwe
+  - zimbabwean
+
 # Titles or categories containing these words are dropped (not photos of scenes).
 unwanted_keywords:
   - map
@@ -108,13 +227,15 @@ allowed_mime_types:
   - image/png
   - image/webp
 
-# Domains
-# -------
+# =======
+# DOMAINS
+# =======
 # key: folder name; quota: pictures needed (manual Table 6); queries: search terms.
 domains:
   - key: family
     label: Family, relationships and community life
     quota: 945
+    location: africa
     queries:
       - family Malawi
       - mother and child Malawi
@@ -123,10 +244,16 @@ domains:
       - grandmother Malawi
       - community meeting Malawi
       - household Malawi
+      - family village Africa
+      - mother and child Africa
+      - children playing village Africa
+      - grandmother Africa
+      - community meeting village Africa
 
   - key: food
     label: Food, cooking and nutrition
     quota: 756
+    location: africa
     queries:
       - nsima Malawi
       - cooking Malawi
@@ -135,10 +262,16 @@ domains:
       - kitchen Malawi
       - fish chambo Malawi
       - meal Malawi
+      - maize meal Africa
+      - cooking over charcoal Africa
+      - pounding maize Africa
+      - village kitchen Africa
+      - fish market Africa
 
   - key: health
     label: Health, hygiene and wellbeing
     quota: 756
+    location: africa
     queries:
       - health centre Malawi
       - clinic Malawi
@@ -146,10 +279,16 @@ domains:
       - hand washing Malawi
       - sanitation Malawi
       - nurse Malawi
+      - health clinic Africa
+      - rural health centre Africa
+      - nurse with patient Africa
+      - hand washing children Africa
+      - latrine sanitation Africa
 
   - key: agriculture
     label: Agriculture, livestock and fishing
     quota: 693
+    location: africa
     queries:
       - maize field Malawi
       - farmer Malawi
@@ -159,10 +298,16 @@ domains:
       - cattle Malawi
       - fishing Lake Malawi
       - tea estate Malawi
+      - maize harvest Zambia
+      - farmer hoeing field Africa
+      - tobacco leaves Africa
+      - cattle herding Africa
+      - smallholder farm Africa
 
   - key: work-trade
     label: Work, trade and personal finance
     quota: 630
+    location: africa
     queries:
       - market Malawi
       - market stall Malawi
@@ -171,10 +316,16 @@ domains:
       - tailor Malawi
       - carpenter Malawi
       - brick making Malawi
+      - village market Africa
+      - market stall vendor Africa
+      - tailor sewing Africa
+      - carpenter workshop Africa
+      - brick making Africa
 
   - key: education
     label: Education and learning
     quota: 630
+    location: africa
     queries:
       - school Malawi
       - classroom Malawi
@@ -182,10 +333,16 @@ domains:
       - students Malawi
       - teacher Malawi
       - library Malawi
+      - rural classroom Africa
+      - pupils in school uniform Africa
+      - teacher at blackboard Africa
+      - school library Africa
+      - students studying Africa
 
   - key: transport
     label: Transport and travel
     quota: 441
+    location: africa
     queries:
       - minibus Malawi
       - bicycle Malawi
@@ -194,6 +351,11 @@ domains:
       - bus station Malawi
       - boat Lake Malawi
       - ferry Ilala Malawi
+      - minibus taxi Tanzania
+      - bicycle taxi Africa
+      - bus station Africa
+      - rural road Africa
+      - ferry boat Africa
 
   - key: sport-leisure
     label: Sport, recreation and entertainment
@@ -212,6 +374,7 @@ domains:
   - key: nature
     label: Nature, weather and environment
     quota: 378
+    location: any
     queries:
       - landscape Malawi
       - Lake Malawi shore
@@ -220,6 +383,10 @@ domains:
       - river Malawi
       - baobab Malawi
       - wildlife Malawi
+      - rainy season Africa
+      - river landscape Africa
+      - savanna trees Africa
+      - flooded road Africa
 
   - key: technology
     label: Technology and communication
@@ -249,6 +416,7 @@ domains:
   - key: public-services
     label: Public services and civic life
     quota: 126
+    location: africa
     queries:
       - borehole Malawi
       - water point Malawi
@@ -256,6 +424,11 @@ domains:
       - post office Malawi
       - district office Malawi
       - market building Malawi
+      - water point Africa
+      - fetching water Africa
+      - police station Africa
+      - post office Africa
+      - district office Africa
 
 # Drop photos dated before this year (photos with no date are kept).
-min_year: 2000
+min_year: 1995

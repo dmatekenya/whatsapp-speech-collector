@@ -63,7 +63,11 @@ def run_harvest(
     for source in sources:
         sweep = getattr(source, "geo_sweep", None)
         if sweep is not None:
-            found = sweep()
+            try:
+                found = sweep()
+            except Exception as exc:
+                log.error("%s geo-sweep failed: %s", source.name, exc)
+                continue
             log.info("unassigned | %s | geo-sweep -> %d", source.name, len(found))
             candidates.extend(found)
     for key in domain_keys:

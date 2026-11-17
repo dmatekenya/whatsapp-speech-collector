@@ -20,7 +20,8 @@ class Domain:
     label: str
     quota: int
     queries: list[str]
-    location: str = "malawi"  # "malawi": must show a Malawi signal; "any": no requirement
+    # "malawi": must show a Malawi signal; "africa": Malawi or Africa signal; "any": no requirement
+    location: str = "malawi"
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,8 @@ class HarvestConfig:
     http: HttpSettings
     malawi_bbox: BBox
     malawi_place_names: list[str]
+    africa_bbox: BBox
+    africa_place_names: list[str]
     unwanted_keywords: list[str]
     allowed_mime_types: list[str]
     domains: list[Domain] = field(default_factory=list)
@@ -107,8 +110,8 @@ def load_config(path: str | Path) -> HarvestConfig:
         for d in raw["domains"]
     ]
     for d in domains:
-        if d.location not in ("malawi", "any"):
-            raise ValueError(f"Domain {d.key!r}: location must be 'malawi' or 'any'")
+        if d.location not in ("malawi", "africa", "any"):
+            raise ValueError(f"Domain {d.key!r}: location must be 'malawi', 'africa' or 'any'")
 
     keys = [d.key for d in domains]
     if len(keys) != len(set(keys)):
@@ -130,6 +133,8 @@ def load_config(path: str | Path) -> HarvestConfig:
         http=HttpSettings(**raw.get("http", {})),
         malawi_bbox=BBox(**raw["malawi_bbox"]),
         malawi_place_names=[p.lower() for p in raw.get("malawi_place_names", [])],
+        africa_bbox=BBox(**raw["africa_bbox"]),
+        africa_place_names=[p.lower() for p in raw.get("africa_place_names", [])],
         unwanted_keywords=[w.lower() for w in raw.get("unwanted_keywords", [])],
         allowed_mime_types=list(raw.get("allowed_mime_types", [])),
         domains=domains,

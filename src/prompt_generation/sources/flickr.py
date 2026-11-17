@@ -7,6 +7,7 @@ Licence IDs/names come from flickr.photos.licenses.getInfo, cached by the shared
 from __future__ import annotations
 
 import html
+import logging
 import os
 import re
 import time
@@ -15,6 +16,14 @@ from typing import Any
 from ..config import HarvestConfig
 from ..filters import licence_allowed
 from ..models import Candidate
+
+log = logging.getLogger(__name__)
+
+
+def _utc_midnight() -> int:
+    """Start of the current UTC day, as a Unix timestamp."""
+    return int(time.time()) // 86400 * 86400
+
 
 API_URL = "https://www.flickr.com/services/rest/"
 PAGE_SIZE = 250
@@ -79,8 +88,8 @@ class FlickrSource:
         box = self.cfg.malawi_bbox
         params = {**self._base_params(), "has_geo": 1,
                   "bbox": f"{box.min_lon},{box.min_lat},{box.max_lon},{box.max_lat}"}
-        # Freeze the upper bound for this run; upload ranges are inclusive, in seconds.
-        return self._sweep_range(params, 0, int(time.time()))
+        # Use UTC midnight so repeat runs on the same day reuse cached searches.
+        return self._sweep_range(params, 0, _utc_midnight())
 
     def _sweep_range(self, params: dict[str, Any], start: int, end: int) -> list[Candidate]:
         params = {**params, "min_upload_date": start, "max_upload_date": end}
@@ -103,14 +112,16 @@ class FlickrSource:
         data, page = first, 1
         while len(out) < total:
             found = parse_response(data, query, domain_key, self.licences or {})
-            if not found:
-                raise RuntimeError("Flickr returned an empty page before the reported total")
             out.extend(found)
-            if len(out) >= total:
+            if len(found) < params["per_page"] or len(out) >= total:
                 break
             page += 1
             data = self._get({**params, "page": page})
-        return out[:total]
+        collected = out[:total]
+        if domain_key == "unassigned":
+            log.info("Flickr sweep: fetched %d photos (Flickr estimated %d)",
+                     len(collected), int(first["photos"]["total"]))
+        return collected
 
 
 # =======

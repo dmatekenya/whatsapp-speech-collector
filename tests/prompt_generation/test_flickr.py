@@ -104,7 +104,7 @@ def test_sweep_pages_until_total_reached(cfg):
 
 
 def test_sweep_splits_upload_ranges_above_4000(cfg, monkeypatch):
-    monkeypatch.setattr("src.prompt_generation.sources.flickr.time.time", lambda: 3)
+    monkeypatch.setattr("src.prompt_generation.sources.flickr._utc_midnight", lambda: 3)
     photos = [photo(f"{second}-{i}", second) for second, count in enumerate([1000, 1001, 1000, 1500])
               for i in range(count)]
     http = FakeHttp(photos)
@@ -220,3 +220,80 @@ def test_parser_keeps_real_coordinates_and_falls_back_from_empty_ownername():
     candidate = parse_response({"photos": {"photo": [photo(1, ownername="")]}}, "q", "food", {})[0]
     assert candidate.creator == "123@N01"
     assert candidate.lat == pytest.approx(-13.96) and candidate.lon == pytest.approx(33.77)
+
+
+# ================
+# ESTIMATED TOTALS
+# ================
+
+
+@pytest.mark.parametrize("count", [150, 250])
+def test_estimated_total_stops_on_short_or_empty_page(cfg, caplog, count):
+    class EstimatedHttp(FakeHttp):
+        def get_json(self, source, url, params):
+            data = super().get_json(source, url, params)
+            if "photos" in data:
+                data["photos"]["total"] = "600"
+            return data
+
+    http = EstimatedHttp([photo(i) for i in range(count)])
+    with caplog.at_level("INFO"):
+        result = FlickrSource(http, cfg).geo_sweep()
+    assert len(result) == count
+    search_calls = [p for p in http.calls if p["method"] == "flickr.photos.search"]
+    assert len(search_calls) == (1 if count < 250 else 2)
+    messages = [r.message for r in caplog.records if r.message.startswith("Flickr sweep:")]
+    assert messages == [f"Flickr sweep: fetched {count} photos (Flickr estimated 600)"]
+
+
+def test_sweep_cache_dates_are_stable_within_utc_day(cfg, monkeypatch):
+    from datetime import datetime, timezone
+
+    midnight = int(datetime(2026, 11, 16, tzinfo=timezone.utc).timestamp())
+    http = FakeHttp([])
+    source = FlickrSource(http, cfg)
+    for offset in (1, 86399):
+        monkeypatch.setattr("src.prompt_generation.sources.flickr.time.time", lambda: midnight + offset)
+        source.geo_sweep()
+    searches = [p for p in http.calls if p["method"] == "flickr.photos.search"]
+    assert len(searches) == 2
+    assert searches[0] == searches[1]
+    assert searches[0]["max_upload_date"] == midnight
+
+
+def test_sweep_error_is_logged_and_other_sources_continue(cfg, monkeypatch, caplog):
+    class BrokenSource:
+        name = "broken"
+        text_enabled = False
+
+        def geo_sweep(self):
+            raise RuntimeError("sweep unavailable")
+
+    healthy = FlickrSource(FakeHttp([photo(1)]), replace(cfg, flickr=FlickrConfig(modes=["geo-sweep"])))
+    monkeypatch.setattr("src.prompt_generation.harvest.checks.fetch_thumbnails", lambda *args: None)
+    monkeypatch.setattr("src.prompt_generation.harvest.checks.drop_near_duplicates", lambda *args: None)
+    with caplog.at_level("ERROR"):
+        result = run_harvest(cfg, [BrokenSource(), healthy], ["food"], "recover", 1, lambda *args: None)
+    assert len(result.candidates) == 1 and result.candidates[0].status == "kept"
+    assert "broken geo-sweep failed: sweep unavailable" in caplog.text
+    assert (result.run_dir / "candidates.csv").exists()
+
+
+def test_split_ranges_also_stop_on_empty_pages(cfg, monkeypatch):
+    monkeypatch.setattr("src.prompt_generation.sources.flickr._utc_midnight", lambda: 3)
+
+    class EstimatedRangesHttp(FakeHttp):
+        def get_json(self, source, url, params):
+            data = super().get_json(source, url, params)
+            if "photos" in data:
+                bounds = (params["min_upload_date"], params["max_upload_date"])
+                data["photos"]["total"] = "5000" if bounds == (0, 3) else "600"
+            return data
+
+    http = EstimatedRangesHttp([photo(i, uploaded=0) for i in range(250)])
+    result = FlickrSource(http, cfg).geo_sweep()
+    assert len(result) == 250
+    searches = [p for p in http.calls if p["method"] == "flickr.photos.search"]
+    assert [(p["min_upload_date"], p["max_upload_date"], p["page"]) for p in searches] == [
+        (0, 3, 1), (2, 3, 1), (0, 1, 1), (0, 1, 2),
+    ]

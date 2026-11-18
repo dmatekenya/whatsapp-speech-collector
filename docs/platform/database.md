@@ -31,6 +31,28 @@ relative to a configurable root. Schema changes are made only through Alembic mi
 | `qc_human_reviews` | Tier-3 supervisor decisions (accept / reject), append-only | `id`, `operation_key` | No (supervisor ID and display name; recording IDs) |
 | `alembic_version` | Which migrations have been applied (managed by Alembic) | | No |
 
+### QC calibration
+
+`calibration_state` stores the study conversation by `enrollment_id`. Its
+JSON context records the selected condition, completed conditions, current task
+slot and attempt, and the inbound message reserved for an in-progress upload.
+The reproducible suggested order lives in `enrollments.attributes.condition_order`.
+
+`calibration_clips` links each study attempt to one `recordings` row and the
+study enrollment. It records the condition, task type and position, optional
+fixed prompt ID, attempt number, menu suggestion, actual condition position and
+fast-QC measurements. A re-record adds an attempt and keeps the earlier one.
+The requested condition is protocol metadata. Eligibility for main progress
+and coverage still comes from `main_recordings`, and calibration clips create
+no assignment rows. `outbound_messages.interactive` stores an optional Meta
+list or button payload delivered by the existing outbox.
+
+Run `python -m scripts.export_calibration_clips NEW_DIRECTORY` for the
+restricted metadata CSV. Add `--blind` to export opaque WAV filenames and a
+shuffled rater CSV. Keep the adjacent `.key.csv` outside the material sent to
+raters. Neither export includes names or phone numbers.
+
+
 ## How they connect
 
 ```{mermaid}

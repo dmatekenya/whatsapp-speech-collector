@@ -1,0 +1,17 @@
+studies:
+  qc_calibration:
+    enabled: false
+    prompts:
+      sentence: S12577
+      conversation_starter: C0482
+    conditions:
+      C1: {title: Good, tasks: [sentence, conversation_starter, free_speech]}
+      C2: {title: Too quiet, tasks: [sentence, conversation_starter, free_speech]}
+      C3: {title: Far away, tasks: [conversation_starter, free_speech]}
+      C4: {title: Background voices, tasks: [sentence, conversation_starter, free_speech]}
+      C5: {title: Background music, tasks: [sentence, conversation_starter, free_speech]}
+      C6: {title: Noisy surroundings, tasks: [sentence, conversation_starter, free_speech]}
+      C7: {title: Echo, tasks: [sentence, conversation_starter, free_speech]}
+      C8: {title: Muffled microphone, tasks: [sentence, conversation_starter, free_speech]}
+      C9: {title: Silence in a quiet room, tasks: [silence, silence, silence]}
+      C10: {title: Silence with speech, tasks: [silence, silence, silence]}

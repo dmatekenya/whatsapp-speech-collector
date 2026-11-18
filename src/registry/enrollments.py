@@ -11,8 +11,17 @@ from src.config import PROJECT_ROOT
 from src.conversation.locks import lock_conversation
 from src.storage.models import Assignment, ConversationState, Enrollment, EnrollmentActivation, Participant, TaskSession
 
+from src.studies.qc_calibration.config import STUDY as EXPERIMENT
+from src.studies.qc_calibration.config import initial_attributes
+
 MAIN = "main"
-EXPERIMENT = "qc_calibration"
+
+
+def initialize_study(enrollment: Enrollment) -> None:
+    if enrollment.study == EXPERIMENT and not (enrollment.attributes or {}).get("condition_order"):
+        enrollment.attributes = {
+            **(enrollment.attributes or {}), **initial_attributes(enrollment.participant_id, enrollment.round),
+        }
 
 
 # =======
@@ -78,6 +87,7 @@ def activate(db: Session, participant: Participant, enrollment: Enrollment) -> N
             pause_main_session(db, participant.participant_id, datetime.now(UTC))
         current.status = "paused"
         db.flush()  # close the previous enrollment before inserting or activating the next
+    initialize_study(enrollment)
     enrollment.status = "active"
     db.add(enrollment)
     db.flush()

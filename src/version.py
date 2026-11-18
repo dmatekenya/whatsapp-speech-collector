@@ -6,7 +6,7 @@ from functools import lru_cache
 
 from src.config import PROJECT_ROOT
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.6.0"
 
 
 @lru_cache
@@ -20,4 +20,4 @@ def build_info() -> dict[str, str]:
             ).strip()
         except (OSError, subprocess.SubprocessError):
             commit = "unknown"
-    return {"version": APP_VERSION, "git_commit": commit}
+    return {"version": os.getenv("APP_VERSION") or APP_VERSION, "git_commit": commit}

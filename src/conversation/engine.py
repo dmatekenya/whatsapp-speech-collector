@@ -53,6 +53,7 @@ from src.registry.enrollments import MAIN, active_enrollment, pause_main_session
 from src.storage.audio import apply_audio_origin, apply_length_flag
 from src.storage.db import get_sync_sessionmaker
 from src.storage.duplicates import EXPERIMENT_DUPLICATE
+from src.studies.qc_calibration import flow as calibration
 from src.storage.models import (
     Assignment,
     ConversationState,
@@ -715,6 +716,14 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
             received = db.get(Enrollment, recording.enrollment_id)
         elif participant is not None:
             received = received_enrollment(db, participant_id, message.received_at)
+        if participant is not None and participant.status == "active" and calibration.enabled(message, active, received):
+            ids = calibration.respond(db, participant, active, message, recording)
+            db.commit()
+            return ids
+        if received is not None and received.study == calibration.STUDY and recording is not None:
+            if calibration.save_reserved_clip(db, received, message, recording):
+                db.commit()
+                return []
         main_clip = received is None or received.study == MAIN
         if participant is None:
             reply = _unregistered_reply(db, message, catalog, now)

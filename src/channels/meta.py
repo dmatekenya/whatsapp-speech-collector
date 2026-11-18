@@ -147,6 +147,7 @@ class MetaChannel:
         content_type = media.get("mime_type") or None
 
         text: str | None = None
+        interactive_reply_id = None
         is_voice_note: bool | None = None
         if kind == "text":
             text, message_type = (message.get("text") or {}).get("body") or None, MessageType.TEXT
@@ -157,6 +158,7 @@ class MetaChannel:
             interactive = message.get("interactive") or {}
             reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
             text, message_type = reply.get("title") or None, MessageType.TEXT
+            interactive_reply_id = reply.get("id") if isinstance(reply.get("id"), str) else None
         elif kind == "audio" or (kind == "document" and (content_type or "").startswith("audio/")):
             message_type = MessageType.AUDIO
             is_voice_note = bool(media.get("voice", False))
@@ -178,6 +180,7 @@ class MetaChannel:
             is_voice_note=is_voice_note,
             forwarded=_forwarded(context),
             raw=dict(params),
+            interactive_reply_id=interactive_reply_id,
         )
 
     def parse_status(self, status: dict[str, Any]) -> StatusUpdate:
@@ -306,6 +309,27 @@ class MetaChannel:
         if caption:
             image["caption"] = caption
         return self._send(to, {"type": "image", "image": image})
+
+    def send_interactive_list(self, to: str, body: str, action: dict[str, Any]) -> str:
+        rows = [row for section in action["sections"] for row in section["rows"]]
+        if not 1 <= len(rows) <= 10 or not 1 <= len(action["button"]) <= 20 or any(
+            not 1 <= len(row["title"]) <= 24 or len(row.get("description", "")) > 72 for row in rows
+        ):
+            raise MessageSendError("Invalid interactive list", permanent=True)
+        return self._send_interactive(to, body, "list", action)
+
+    def send_reply_buttons(self, to: str, body: str, action: dict[str, Any]) -> str:
+        buttons = action["buttons"]
+        if not 1 <= len(buttons) <= 3 or any(not 1 <= len(button["reply"]["title"]) <= 20 for button in buttons):
+            raise MessageSendError("Invalid reply buttons", permanent=True)
+        return self._send_interactive(to, body, "button", action)
+
+    def _send_interactive(self, to: str, body: str, kind: str, action: dict[str, Any]) -> str:
+        if not 1 <= len(body) <= 1024:
+            raise MessageSendError("Invalid interactive message body", permanent=True)
+        return self._send(to, {
+            "type": "interactive", "interactive": {"type": kind, "body": {"text": body}, "action": action},
+        })
 
     def send_template(self, to: str, name: str, language: str, body_params: list[str]) -> str:
         """An approved message template, which WhatsApp allows outside the 24-hour window.

@@ -9,7 +9,7 @@ from src.importers.framework import ImportReport, run_import
 from src.importers.participants import ParticipantImporter
 from src.registry.participants import normalize_phone
 from src.storage import db
-from src.storage.models import Participant
+from src.storage.models import Enrollment, Participant
 
 HEADER = ["name", "phone_number", "age", "sex", "district", "first_language", "accent"]
 TODAY = date(2026, 10, 17)
@@ -163,6 +163,34 @@ def test_batch_option_on_the_command_line(
     with pytest.raises(SystemExit) as refused:
         main([str(path), "--batch", " "])
     assert refused.value.code == 2  # argparse: an empty batch is refused
+
+
+@pytest.mark.parametrize(
+    ("batch", "round_name", "expected_cap"),
+    [
+        ("round1", "round1", 60),
+        ("pilot", "pilot", 80),
+        ("pilot", "round1", 80),
+        ("other-cohort", "pilot", 60),
+    ],
+)
+def test_new_participant_lifetime_cap_follows_batch(
+    clean_db: None, tmp_path: Path, batch: str, round_name: str, expected_cap: int,
+) -> None:
+    from scripts.import_participants import main
+
+    path = write_csv(tmp_path, "new_participant.csv", [ALICE])
+    with pytest.raises(SystemExit) as done:
+        main([str(path), "--batch", batch, "--round", round_name, "--no-send-welcome"])
+    assert done.value.code == 0
+
+    (participant,) = participants()
+    assert participant.batch == batch
+    assert participant.lifetime_cap_minutes == expected_cap
+    with db.get_sync_sessionmaker()() as session:
+        enrollment = session.scalars(select(Enrollment)).one()
+        assert enrollment.participant_id == participant.participant_id
+        assert enrollment.round == round_name
 
 
 def test_ids_copy_written_and_original_untouched(clean_db: None, tmp_path: Path) -> None:

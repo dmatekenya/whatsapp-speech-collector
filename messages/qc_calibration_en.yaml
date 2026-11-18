@@ -1,6 +1,9 @@
 menu: Choose a recording condition. You can follow the suggested order or pick any unfinished condition.
 menu_button: Conditions
 ready: Ready
+continue: Continue
+task_header: "{code} · {name} ({reminder}) — Task {slot} of {total}"
+saved_after_break: Clip saved.
 change: Change condition
 next: Next
 retake: Re-record
@@ -13,7 +16,7 @@ silence: "Record 10–15 seconds without speaking. This is silence clip {slot} o
 conditions:
   C1: In a quiet room, hold your phone as you normally would and speak clearly.
   C2: Hold your phone normally and speak very quietly.
-  C3: Start recording, swipe up to lock, put the phone down 1–2 m away, then speak.
+  C3: Hold the phone at arm's length (about 60–70 cm) and speak normally.
   C4: Speak while people are talking in the background.
   C5: Speak while music is playing in the background.
   C6: Speak with other background noise nearby.

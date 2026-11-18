@@ -15,11 +15,14 @@ TASKS = {"sentence", "conversation_starter", "free_speech", "silence"}
 
 class Condition(BaseModel):
     title: str = Field(min_length=1, max_length=24)
+    reminder: str = Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")
     tasks: list[str] = Field(min_length=1)
+    storage_order: list[str] | None = None
 
 
 class CalibrationConfig(BaseModel):
     enabled: bool = False
+    resume_reminder_minutes: int = Field(default=10, gt=0)
     prompts: dict[str, str]
     conditions: dict[str, Condition]
 
@@ -32,6 +35,11 @@ class CalibrationConfig(BaseModel):
         for condition in self.conditions.values():
             if not set(condition.tasks) <= TASKS:
                 raise ValueError("Unknown calibration task")
+            if condition.storage_order is not None and (
+                len(set(condition.tasks)) != len(condition.tasks)
+                or sorted(condition.storage_order) != sorted(condition.tasks)
+            ):
+                raise ValueError("Storage order must list each task exactly once")
         return self
 
 

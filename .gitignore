@@ -105,6 +105,7 @@ data/*
 .env.*
 !.env.example
 !.env.production.example
+!.env.staging.example
 
 # Database backups (contain personal data)
 backups/

@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     # APP
     # ===
     app_env: str = "development"
+    whatsapp_sends_disabled: bool = False
+    staging_meta_audio_fixture: Path | None = None
     # Bot message catalog: messages/bot_messages_{bot_language}.yaml
     bot_language: str = "en"
     # Shown in the HELP message, e.g. a phone number or email for the project team.
@@ -79,6 +81,12 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     redis_url: str = "redis://localhost:6379/0"
+
+    @model_validator(mode="after")
+    def _require_staging_send_stub(self) -> "Settings":
+        if self.app_env == "staging" and not self.whatsapp_sends_disabled:
+            raise ValueError("Staging requires WHATSAPP_SENDS_DISABLED=true")
+        return self
 
     @field_validator("audio_root", "prompt_media_root")
     @classmethod

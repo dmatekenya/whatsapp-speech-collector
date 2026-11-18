@@ -365,10 +365,11 @@ def test_import_send_welcome_sends_to_new_participants_only(
         assert done.value.code == 0
     assert channel.templates == []
 
-    # The participants already exist now: a second import has no new ones to welcome.
-    with pytest.raises(SystemExit) as done:
-        main([str(path)])
-    assert done.value.code == 0 and channel.templates == []
+    # The same enrollment is refused; a new round creates no new participants to welcome.
+    for argv, status in (([str(path)], 1), ([str(path), "--round", "round1"], 0)):
+        with pytest.raises(SystemExit) as done:
+            main(argv)
+        assert done.value.code == status and channel.templates == []
 
     # New participants get it; the test participant is skipped.
     more = write_people(tmp_path, [["Ben Phiri", "0888 111 222", "false"], ["Tina Test", "0999 222 333", "true"]])

@@ -23,7 +23,10 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import ColumnElement, and_, exists, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from src.storage.models import Assignment, OutboundMessage, Participant, Prompt, Recording, TaskSession
+from src.registry.enrollments import MAIN, active_enrollment, lifetime_studies
+from src.storage.models import (
+    Assignment, Enrollment, OutboundMessage, Participant, Prompt, Recording, TaskSession, main_recordings,
+)
 from src.tasks.config import CollectionConfig, get_collection_config
 
 # Assignments that hold a slot regardless of time ("sent" holds one until it expires).
@@ -61,7 +64,11 @@ def utcnow() -> datetime:
 # =========================
 def _holds_slot(now: datetime) -> ColumnElement[bool]:
     return or_(
-        Assignment.status.in_(HOLDING_STATUSES),
+        and_(
+            Assignment.status.in_(HOLDING_STATUSES),
+            or_(Assignment.recording_id.is_(None),
+                exists().where(main_recordings.c.id == Assignment.recording_id)),
+        ),
         and_(Assignment.status == "sent", Assignment.expires_at > now),
     )
 
@@ -176,22 +183,80 @@ def minutes_recorded(db: Session, participant_id: str) -> dict[str, float]:
     assignment, excluding recordings flagged as duplicates. The one definition
     of progress toward targets."""
     totals = dict.fromkeys(get_collection_config().task_types, 0.0)
-    rows = db.execute(
-        select(Assignment.prompt_type, func.coalesce(func.sum(Recording.duration_s), 0.0))
-        .join(Recording, Recording.id == Assignment.recording_id)
+    recordings = main_recordings.c
+    query = (
+        select(Assignment.prompt_type, func.coalesce(func.sum(recordings.duration_s), 0.0))
+        .join(main_recordings, recordings.id == Assignment.recording_id)
         .where(
             Assignment.participant_id == participant_id,
             Assignment.status.in_(COUNTED_STATUSES),
-            Recording.status == "stored",
-            Recording.duplicate_of_recording_id.is_(None),
-            # Clips rejected as failed attempts (or later by QC) never count.
-            Recording.qc_status != "rejected",
+            recordings.status == "stored",
+            recordings.duplicate_of_recording_id.is_(None),
+            recordings.qc_status != "rejected",
         )
         .group_by(Assignment.prompt_type)
     )
+    enrollment = active_enrollment(db, participant_id)
+    if enrollment is not None:
+        query = query.join(TaskSession, TaskSession.id == Assignment.session_id).where(
+            TaskSession.enrollment_id == enrollment.id,
+        )
+    rows = db.execute(query)
     for task_type, seconds in rows:
         totals[task_type] = float(seconds) / 60
     return totals
+
+
+def lifetime_minutes(db: Session, participant_id: str, *, exclude_recording_id: int | None = None) -> float:
+    """Count stored assigned and unassigned clips for configured studies, including pending QC."""
+    studies = lifetime_studies()
+    if not studies:
+        return 0.0
+    source = main_recordings if studies == (MAIN,) else Recording.__table__
+    clips = source.c
+    eligible = Enrollment.study.in_(studies)
+    if MAIN in studies:
+        eligible = or_(eligible, clips.enrollment_id.is_(None))
+    query = (
+        select(func.coalesce(func.sum(clips.duration_s), 0.0))
+        .select_from(source.outerjoin(Enrollment, clips.enrollment_id == Enrollment.id))
+        .where(clips.participant_id == participant_id, eligible, clips.status == "stored",
+               clips.qc_status.in_(("accepted", "pending", "needs_review")),
+               clips.duplicate_of_recording_id.is_(None))
+    )
+    if exclude_recording_id is not None:
+        query = query.where(clips.id != exclude_recording_id)
+    return float(db.scalar(query)) / 60
+
+
+@dataclass(frozen=True)
+class EnrollmentLimits:
+    lifetime_remaining: float
+    round_target: float
+    round_remaining: float
+
+    @property
+    def effective_target(self) -> float:
+        return min(self.round_target, max(self.lifetime_remaining, 0))
+
+    @property
+    def exhausted(self) -> bool:
+        return self.effective_target <= 0 or self.round_remaining <= 0
+
+
+def enrollment_limits(db: Session, participant: Participant, enrollment: Enrollment,
+                      config: CollectionConfig, *, exclude_recording_id: int | None = None) -> EnrollmentLimits:
+    remaining = float("inf")
+    if participant.lifetime_cap_minutes is not None and enrollment.study in lifetime_studies():
+        remaining = participant.lifetime_cap_minutes - lifetime_minutes(
+            db, participant.participant_id, exclude_recording_id=exclude_recording_id,
+        )
+    configured_target = config.total(config.targets_for(participant.attributes))
+    if enrollment.target_minutes is None:
+        return EnrollmentLimits(remaining, configured_target, float("inf"))
+    round_target = min(enrollment.target_minutes, configured_target)
+    round_remaining = enrollment.target_minutes - sum(minutes_recorded(db, participant.participant_id).values())
+    return EnrollmentLimits(remaining, round_target, round_remaining)
 
 
 def choose_task_type(
@@ -252,7 +317,9 @@ def start_session(
     config.task_type(task_type)  # raises for an unknown type
     if get_active_session(db, participant_id) is not None:
         raise ActiveSessionError(f"{participant_id} already has an active session")
+    enrollment = active_enrollment(db, participant_id)
     task_session = TaskSession(
+        enrollment_id=enrollment.id if enrollment else None,
         participant_id=participant_id,
         task_type=task_type,
         status="active",
@@ -366,6 +433,15 @@ def assign_next_prompt(
     None if the session is full or no prompt is available.
     """
     config = config or get_collection_config()
+    if task_session.enrollment_id is not None:
+        enrollment = db.get(Enrollment, task_session.enrollment_id)
+        participant = db.scalar(select(Participant).where(Participant.participant_id == task_session.participant_id))
+        if enrollment.status != "active" or enrollment.study != MAIN:
+            return None
+        if (enrollment.target_minutes is not None or participant.lifetime_cap_minutes is not None) and (
+            enrollment_limits(db, participant, enrollment, config).exhausted
+        ):
+            return None
     position = next_position(db, task_session)
     if position is None:
         return None
@@ -419,6 +495,9 @@ def find_open_assignment(
             Assignment.participant_id == participant_id,
             Assignment.outbound_message_sid == replied_to_message_sid,
         )
+        enrollment = active_enrollment(db, participant_id)
+        if enrollment is not None:
+            query = query.join(TaskSession).where(TaskSession.enrollment_id == enrollment.id)
         if channel is not None:
             query = query.where(
                 select(OutboundMessage.id)
@@ -447,6 +526,15 @@ def find_open_assignment(
     )
 
 
+def _check_assignment_recording(db: Session, assignment: Assignment, recording: Recording) -> None:
+    if recording.participant_id not in (None, assignment.participant_id):
+        raise TaskBankError("the recording belongs to a different participant")
+    if recording.enrollment_id is not None and not db.scalar(
+        select(exists().where(main_recordings.c.id == recording.id))
+    ):
+        raise TaskBankError("a recording outside the main study cannot answer a main assignment")
+
+
 def record_response(
     db: Session,
     assignment_id: int,
@@ -466,8 +554,7 @@ def record_response(
         raise LookupError("assignment or recording not found")
     if assignment.status not in ANSWERABLE_STATUSES:
         raise AssignmentClosedError(f"Assignment {assignment_id} is {assignment.status}")
-    if recording.participant_id not in (None, assignment.participant_id):
-        raise TaskBankError("the recording belongs to a different participant")
+    _check_assignment_recording(db, assignment, recording)
     if assignment.recording_id is not None and assignment.recording_id != recording_id:
         if assignment.retake_count >= config.max_retakes_per_prompt:
             raise RetakeLimitError(f"Assignment {assignment_id} has no retakes left")
@@ -542,8 +629,7 @@ def record_failed_attempt(
     recording = db.get(Recording, recording_id, with_for_update=True)
     if assignment is None or recording is None:
         raise LookupError("assignment or recording not found")
-    if recording.participant_id not in (None, assignment.participant_id):
-        raise TaskBankError("the recording belongs to a different participant")
+    _check_assignment_recording(db, assignment, recording)
     recording.assignment_id = assignment.id
     recording.qc_status = "rejected"
     recording.qc_reason = reason

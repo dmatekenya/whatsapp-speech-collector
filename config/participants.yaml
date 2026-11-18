@@ -53,3 +53,13 @@ attributes:
     report_counts: true
   primary_device_brand: {type: text, report_counts: true}   # e.g. Tecno, Itel, Samsung, Apple
   primary_device_model: {type: text, report_counts: true}   # e.g. Spark 10, iPhone 12
+
+# ===========
+# ENROLLMENTS
+# ===========
+lifetime_cap_minutes:
+  default: 60
+  pilot: 80
+studies:
+  main: {counts_toward_lifetime: true}
+  qc_calibration: {counts_toward_lifetime: false}

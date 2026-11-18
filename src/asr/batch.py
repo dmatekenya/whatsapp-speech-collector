@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.asr.client import Chunk, Transcriber
 from src.storage.files import FileStorage
-from src.storage.models import AsrBatch, Participant, Recording, Transcript
+from src.storage.models import AsrBatch, Participant, Transcript, main_recordings
 
 logger = logging.getLogger(__name__)
 
@@ -104,28 +104,29 @@ def select_clips(db: Session, filters: Filters, storage: FileStorage, tz: ZoneIn
     files.
     --since/--until are local dates (tz) of when the recording was stored.
     """
+    clips = main_recordings.c
     query = (
         select(
-            Recording.id,
-            Recording.wav_path,
-            Recording.duration_s,
-            Recording.qc_status,
-            Recording.qc_reason,
-            Recording.duplicate_of_recording_id,
+            clips.id,
+            clips.wav_path,
+            clips.duration_s,
+            clips.qc_status,
+            clips.qc_reason,
+            clips.duplicate_of_recording_id,
             Participant.is_test,
         )
-        .join(Participant, Participant.participant_id == Recording.participant_id)
-        .where(Recording.status == "stored", Recording.wav_path.is_not(None))
-        .order_by(Recording.id)
+        .join(Participant, Participant.participant_id == clips.participant_id)
+        .where(clips.status == "stored", clips.wav_path.is_not(None))
+        .order_by(clips.id)
     )
     if filters.participants:
-        query = query.where(Recording.participant_id.in_(filters.participants))
+        query = query.where(clips.participant_id.in_(filters.participants))
     if filters.recording_ids:
-        query = query.where(Recording.id.in_(filters.recording_ids))
+        query = query.where(clips.id.in_(filters.recording_ids))
     if filters.since:
-        query = query.where(Recording.created_at >= _local_midnight(filters.since, tz))
+        query = query.where(clips.created_at >= _local_midnight(filters.since, tz))
     if filters.until:
-        query = query.where(Recording.created_at < _local_midnight(filters.until + timedelta(days=1), tz))
+        query = query.where(clips.created_at < _local_midnight(filters.until + timedelta(days=1), tz))
     done: set[int] = set()
     if not filters.force:
         done = set(

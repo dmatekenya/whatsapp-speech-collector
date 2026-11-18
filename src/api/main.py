@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request, Response
@@ -15,6 +16,7 @@ from src.logging_config import setup_logging
 from src.storage.db import get_async_session
 from src.storage.queue import get_inbound_queue
 from src.tasks.config import get_collection_config
+from src.version import build_info
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -23,7 +25,13 @@ get_collection_config()
 
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
-app = FastAPI(title="whatsapp-speech-collector")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    get_settings()
+    yield
+
+
+app = FastAPI(title="whatsapp-speech-collector", lifespan=lifespan)
 app.include_router(media_router)
 app.include_router(meta.router)
 
@@ -59,7 +67,7 @@ def _signature_ok(request: Request, params: dict[str, str]) -> bool:
 # ======
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", **build_info()}
 
 
 @app.post("/whatsapp/webhook")

@@ -19,6 +19,7 @@ parts:
     - file: platform/database
     - file: platform/whatsapp
     - file: platform/deployment
+    - file: platform/deploy
   - file: platform/plans/supervision-dashboard-plan
     sections:
     - file: platform/plans/supervision-qc-contract

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 from twilio.base.exceptions import TwilioRestException
@@ -51,7 +52,10 @@ def _with_prefix(number: str) -> str:
 class TwilioChannel:
     name = TWILIO
 
-    def __init__(self, account_sid: str, auth_token: str, whatsapp_number: str) -> None:
+    def __init__(
+        self, account_sid: str, auth_token: str, whatsapp_number: str, *, sends_disabled: bool = False
+    ) -> None:
+        self._sends_disabled = sends_disabled
         self._account_sid = account_sid
         self._auth_token = auth_token
         self._whatsapp_number = whatsapp_number
@@ -158,6 +162,8 @@ class TwilioChannel:
                 ) from None
 
     def _create(self, to: str, status_callback: str | None, **fields: object) -> str:
+        if self._sends_disabled:
+            return f"stub-{uuid4().hex}"
         if status_callback:
             fields["status_callback"] = status_callback
         try:

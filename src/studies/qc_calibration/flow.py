@@ -23,11 +23,42 @@ def enabled(message: InboundMessage, active: Enrollment | None, received: Enroll
     )
 
 
+def _completed_slots(context: dict) -> list[int]:
+    return context.get("completed_slots", list(range(1, context["slot"])))
+
+
+def _restore_c3_sentence(db: Session, state: CalibrationState) -> None:
+    """Translate old C3 cursors without changing any recorded clip or attempt."""
+    if state.context.get("c3_sentence_added"):
+        return
+    context = {**state.context, "c3_sentence_added": True}
+    paused = dict(context.get("paused", {}))
+    if context.get("condition") == "C3" and context["phase"] in {"setup", "record", "review", "reminder"}:
+        completed = [slot + 1 for slot in _completed_slots(context)]
+        context.update(slot=context["slot"] + 1, completed_slots=completed)
+    if "C3" in paused:
+        old = paused["C3"]
+        paused["C3"] = {**old, "slot": old["slot"] + 1,
+                        "completed_slots": [slot + 1 for slot in _completed_slots(old)]}
+    if "C3" in context["completed"]:
+        context["completed"] = [code for code in context["completed"] if code != "C3"]
+        suggested = db.scalar(select(CalibrationClip.suggested_condition).where(
+            CalibrationClip.enrollment_id == state.enrollment_id, CalibrationClip.condition_code == "C3",
+        ).order_by(CalibrationClip.id).limit(1))
+        paused["C3"] = {"slot": 1, "attempt": 1, "resume_phase": "record",
+                        "completed_slots": [2, 3], "suggested": suggested or "C3"}
+        if context["phase"] == "done":
+            context["phase"] = "menu"
+    context["paused"] = paused
+    state.context = context
+
+
 def prepare_audio(db: Session, enrollment: Enrollment, message: InboundMessage) -> bool:
     """Reserve one message for the current clip before the recording worker commits."""
     state = db.get(CalibrationState, enrollment.id)
     if state is None:
         return False
+    _restore_c3_sentence(db, state)
     context = state.context
     if context.get("resume_phase", context["phase"]) != "record":
         return False
@@ -67,7 +98,7 @@ def _menu(order: list[str], context: dict) -> tuple[str, dict]:
     for code, condition in config.conditions.items():
         count = len(condition.tasks)
         paused = context.get("paused", {}).get(code)
-        done = count if code in completed else (paused["slot"] - 1 if paused else 0)
+        done = count if code in completed else (len(_completed_slots(paused)) if paused else 0)
         progress = f"{done}/{count} done"
         if paused and paused["resume_phase"] == "review":
             progress += " · Clip saved"
@@ -154,9 +185,11 @@ def _save_clip(db: Session, enrollment: Enrollment, context: dict, recording: Re
         .group_by(CalibrationClip.condition_code)
     ).all())
     position = positions.get(context["condition"], max(positions.values(), default=0) + 1)
+    condition = get_config().conditions[context["condition"]]
+    stored_slot = condition.storage_order.index(task) + 1 if condition.storage_order else context["slot"]
     db.add(CalibrationClip(
         recording_id=recording.id, enrollment_id=enrollment.id, condition_code=context["condition"],
-        task_type=task, task_position=context["slot"], prompt_id=prompt.prompt_id if prompt else None,
+        task_type=task, task_position=stored_slot, prompt_id=prompt.prompt_id if prompt else None,
         attempt=context["attempt"], suggested_condition=context["suggested"],
         order_position=position, fast_qc=fast_qc,
     ))
@@ -169,6 +202,7 @@ def save_reserved_clip(
     state = db.get(CalibrationState, enrollment.id)
     if state is None or state.context.get("pending") != message.id or recording.status != "stored":
         return False
+    _restore_c3_sentence(db, state)
     _save_clip(db, enrollment, state.context, recording)
     context = {**state.context, "pending": None, "token": message.id}
     if context["phase"] == "reminder":
@@ -201,7 +235,8 @@ def _last_activity(db: Session, context: dict) -> datetime | None:
 def _pause_condition(context: dict) -> None:
     paused = dict(context.get("paused", {}))
     paused[context["condition"]] = {
-        key: context[key] for key in ("slot", "attempt", "suggested", "resume_phase")
+        **{key: context[key] for key in ("slot", "attempt", "suggested", "resume_phase")},
+        "completed_slots": _completed_slots(context),
     }
     context["paused"] = paused
 
@@ -218,9 +253,10 @@ def respond(
     state = db.get(CalibrationState, enrollment.id)
     if state is None:
         state = CalibrationState(enrollment_id=enrollment.id, context={
-            "phase": "menu", "completed": [], "token": message.id,
+            "phase": "menu", "completed": [], "token": message.id, "c3_sentence_added": True,
         })
         db.add(state)
+    _restore_c3_sentence(db, state)
     context = dict(state.context)
     phase = context["phase"]
     inbound = get_channel(META).parse_inbound(message.raw_payload)
@@ -255,7 +291,8 @@ def respond(
         paused = dict(context.get("paused", {}))
         saved = paused.pop(action, None)
         if saved is None:
-            context.update(phase="setup", suggested=_suggested(order, context["completed"]), slot=1, attempt=1)
+            context.update(phase="setup", suggested=_suggested(order, context["completed"]),
+                           slot=1, attempt=1, completed_slots=[])
         else:
             context.update(saved, phase="reminder")
         context.update(condition=action, paused=paused, token=message.id)
@@ -265,8 +302,12 @@ def respond(
         context.update(phase="record", attempt=context["attempt"] + 1, token=message.id)
     elif phase == "review" and action == "next":
         condition = context["condition"]
-        if context["slot"] < len(get_config().conditions[condition].tasks):
-            context.update(phase="record", slot=context["slot"] + 1, attempt=1, token=message.id)
+        completed_slots = [*_completed_slots(context), context["slot"]]
+        slots = range(1, len(get_config().conditions[condition].tasks) + 1)
+        next_slot = next((slot for slot in slots if slot not in completed_slots), None)
+        if next_slot is not None:
+            context.update(phase="record", slot=next_slot, attempt=1, token=message.id,
+                           completed_slots=completed_slots)
         else:
             completed = [*context["completed"], condition]
             finished = len(completed) == len(order)

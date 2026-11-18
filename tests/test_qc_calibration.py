@@ -131,13 +131,14 @@ def test_off_suggestion_retake_and_main_coverage(client, study):
     assert progress(cutoff) == before
 
 
-def test_c3_skips_sentence_and_all_conditions_resume_main(client, study):
+def test_c3_has_three_tasks_and_all_conditions_resume_main(client, study):
     from_meta(client, mp.text(WA_ID, "Hi"))
     for condition in ("C3", *[code for code in get_config().conditions if code != "C3"]):
         choose(client, condition)
         tap(client, "ready")
         if condition == "C3":
-            assert "Fixed conversation?" in outbound_rows()[-1].body
+            assert get_config().conditions["C3"].tasks == ["sentence", "conversation_starter", "free_speech"]
+            assert "Fixed sentence." in outbound_rows()[-1].body
         for _ in get_config().conditions[condition].tasks:
             clip(client)
             tap(client, "next")
@@ -145,7 +146,7 @@ def test_c3_skips_sentence_and_all_conditions_resume_main(client, study):
     with db.get_sync_sessionmaker()() as session:
         assert active_enrollment(session, "P0001").study == MAIN
         assert session.scalar(select(Enrollment.status).where(Enrollment.study == EXPERIMENT)) == "completed"
-        assert session.scalar(select(func.count()).select_from(CalibrationClip)) == 29
+        assert session.scalar(select(func.count()).select_from(CalibrationClip)) == 30
 
 
 def test_silence_is_stored_with_observational_qc(client, study, tmp_path, monkeypatch):
@@ -189,8 +190,8 @@ def test_silence_is_stored_with_observational_qc(client, study, tmp_path, monkey
     assert key == {"rater_clip_id": rater_clip["clip_id"], "clip_id": metadata[0]["clip_id"]}
 
 
-C3_HEADER = "C3 · Far away (phone 1–2 m away) — Task {slot} of 2"
-C3_SETUP = "Start recording, swipe up to lock, put the phone down 1–2 m away, then speak."
+C3_HEADER = "C3 · Arm's length (phone 60–70 cm away) — Task {slot} of 3"
+C3_SETUP = "Hold the phone at arm's length (about 60–70 cm) and speak normally."
 
 
 def start_c3(client):
@@ -230,7 +231,7 @@ def test_no_resume_reminder_within_threshold(client, study, elapsed):
     start_c3(client)
     row = after_activity(client, mp.text(WA_ID, "Hi"), elapsed=elapsed)
     assert row.interactive is None
-    assert row.body == f"{C3_HEADER.format(slot=1)}\nRecord a spoken answer to this question: Fixed conversation?"
+    assert row.body == f"{C3_HEADER.format(slot=1)}\nRecord yourself reading this sentence: Fixed sentence."
 
 
 def test_text_after_gap_shows_setup_and_continue_resends_prompt(client, study, monkeypatch):
@@ -242,7 +243,7 @@ def test_text_after_gap_shows_setup_and_continue_resends_prompt(client, study, m
     assert titles(row) == ["Continue", "Change condition"]
     tap(client, "continue")
     resumed = outbound_rows()[-1]
-    assert resumed.interactive is None and "Fixed conversation?" in resumed.body
+    assert resumed.interactive is None and "Fixed sentence." in resumed.body
 
 
 def test_late_voice_note_is_saved_and_continue_keeps_review(client, study):
@@ -252,13 +253,13 @@ def test_late_voice_note_is_saved_and_continue_keeps_review(client, study):
     assert titles(row) == ["Continue", "Change condition"]
     tap(client, "continue")
     review = outbound_rows()[-1]
-    assert "Fixed conversation?" in review.body
+    assert "Fixed sentence." in review.body
     assert titles(review) == ["Next", "Re-record"]
     tap(client, "next")
     assert outbound_rows()[-1].body.splitlines()[0] == C3_HEADER.format(slot=2)
     with db.get_sync_sessionmaker()() as session:
         saved = session.scalars(select(CalibrationClip)).one()
-        assert (saved.condition_code, saved.task_position, saved.attempt) == ("C3", 1, 1)
+        assert (saved.condition_code, saved.task_position, saved.attempt) == ("C3", 3, 1)
         assert session.get(Recording, saved.recording_id).status == "stored"
 
 
@@ -271,7 +272,7 @@ def test_change_condition_keeps_partial_slots_and_attempts(client, study):
     menu = outbound_rows()[-1]
     rows = menu.interactive["action"]["sections"][0]["rows"]
     c3 = next(row for row in rows if row["id"].endswith(":C3"))
-    assert c3["description"].startswith("1/2 done · Clip saved")
+    assert c3["description"].startswith("1/3 done · Clip saved")
 
     choose(client, "C1")
     tap(client, "ready")
@@ -289,8 +290,64 @@ def test_change_condition_keeps_partial_slots_and_attempts(client, study):
     with db.get_sync_sessionmaker()() as session:
         saved = session.scalars(select(CalibrationClip).order_by(CalibrationClip.id)).all()
         assert [(c.condition_code, c.task_position, c.attempt, c.order_position) for c in saved] == [
-            ("C3", 1, 1, 1), ("C3", 2, 1, 1), ("C1", 1, 1, 2), ("C3", 2, 2, 1),
+            ("C3", 3, 1, 1), ("C3", 1, 1, 1), ("C1", 1, 1, 2), ("C3", 1, 2, 1),
         ]
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_existing_c3_clips_and_attempts_survive_the_restored_sentence(client, study, monkeypatch, completed):
+    condition = get_config().conditions["C3"]
+    with monkeypatch.context() as legacy:
+        legacy.setattr(condition, "tasks", ["conversation_starter", "free_speech"])
+        legacy.setattr(condition, "storage_order", None)
+        start_c3(client)
+        clip(client)
+        tap(client, "retake")
+        clip(client)
+        tap(client, "next")
+        if completed:
+            clip(client)
+            tap(client, "next")
+    # Simulate a cursor from before the restored sentence was deployed.
+    with db.get_sync_sessionmaker().begin() as session:
+        state = session.scalars(select(CalibrationState)).one()
+        state.context = {key: value for key, value in state.context.items() if key != "c3_sentence_added"}
+        before = session.execute(select(
+            CalibrationClip.id, CalibrationClip.recording_id, CalibrationClip.task_type,
+            CalibrationClip.task_position, CalibrationClip.attempt,
+        ).order_by(CalibrationClip.id)).all()
+
+    from_meta(client, mp.text(WA_ID, "Hi"))
+    if completed:
+        menu = outbound_rows()[-1]
+        rows = menu.interactive["action"]["sections"][0]["rows"]
+        c3 = next(row for row in rows if row["id"].endswith(":C3"))
+        assert c3["description"].startswith("2/3 done")
+        choose(client, "C3")
+        tap(client, "continue")
+    else:
+        assert outbound_rows()[-1].body.splitlines()[0] == C3_HEADER.format(slot=3)
+        clip(client)
+        tap(client, "next")
+
+    sentence = outbound_rows()[-1]
+    assert sentence.body.splitlines()[0] == C3_HEADER.format(slot=1)
+    assert "Fixed sentence." in sentence.body
+    clip(client)
+    tap(client, "next")
+    assert outbound_rows()[-1].interactive["type"] == "list"
+
+    with db.get_sync_sessionmaker()() as session:
+        after = session.execute(select(
+            CalibrationClip.id, CalibrationClip.recording_id, CalibrationClip.task_type,
+            CalibrationClip.task_position, CalibrationClip.attempt,
+        ).order_by(CalibrationClip.id)).all()
+        assert after[:len(before)] == before
+        assert [tuple(row[2:]) for row in after] == [
+            ("conversation_starter", 1, 1), ("conversation_starter", 1, 2),
+            ("free_speech", 2, 1), ("sentence", 3, 1),
+        ]
+        assert "C3" in session.scalars(select(CalibrationState.context)).one()["completed"]
 
 
 def test_additive_migration_round_trip(clean_db):

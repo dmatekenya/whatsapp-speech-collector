@@ -148,10 +148,10 @@ remove its `text` key, and set `type="interactive"` and
 `kind` equal to `list_reply` for a menu row or `button_reply` for an action.
 Sign and post it to the same loopback endpoint.
 
-Select C3, tap Ready, post audio, then tap Re-record and post audio again. Tap
-Next and post the free-speech clip. Confirm the prompt and reply sequence,
-attempts 1 and 2, stored audio, and the absence of a sentence slot or assignment
-rows. Compare prompt coverage and main progress with a baseline taken before
+Select C3 (Arm's length), tap Ready, and post the sentence clip. Tap Re-record
+and post another attempt, then use Next to record the conversation starter
+and free speech. Confirm the prompt and reply sequence, both sentence attempts,
+stored audio, and the absence of assignment rows. Compare prompt coverage and main progress with a baseline taken before
 the fixture turns. Verify replies use stub IDs. Run `staging down -v` and
 confirm the staging Postgres volume is gone.
 

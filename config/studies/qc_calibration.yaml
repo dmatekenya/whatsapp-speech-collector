@@ -8,7 +8,12 @@ studies:
     conditions:
       C1: {title: Good, reminder: "quiet room, speak clearly", tasks: [sentence, conversation_starter, free_speech]}
       C2: {title: Too quiet, reminder: "speak very quietly", tasks: [sentence, conversation_starter, free_speech]}
-      C3: {title: Far away, reminder: "phone 1–2 m away", tasks: [conversation_starter, free_speech]}
+      C3:
+        title: "Arm's length"
+        reminder: "phone 60–70 cm away"
+        tasks: [sentence, conversation_starter, free_speech]
+        # Keep the slot identities already used by stored C3 clips.
+        storage_order: [conversation_starter, free_speech, sentence]
       C4: {title: Background voices, reminder: "voices in the background", tasks: [sentence, conversation_starter, free_speech]}
       C5: {title: Background music, reminder: "music in the background", tasks: [sentence, conversation_starter, free_speech]}
       C6: {title: Noisy surroundings, reminder: "noise nearby", tasks: [sentence, conversation_starter, free_speech]}

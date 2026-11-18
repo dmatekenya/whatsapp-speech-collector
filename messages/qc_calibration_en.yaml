@@ -1,6 +1,9 @@
 menu: Choose a recording condition. You can follow the suggested order or pick any unfinished condition.
 menu_button: Conditions
 ready: Ready
+continue: Continue
+task_header: "{code} · {name} ({reminder}) — Task {slot} of {total}"
+saved_after_break: Clip saved.
 change: Change condition
 next: Next
 retake: Re-record

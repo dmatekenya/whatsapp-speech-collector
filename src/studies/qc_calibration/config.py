@@ -15,11 +15,13 @@ TASKS = {"sentence", "conversation_starter", "free_speech", "silence"}
 
 class Condition(BaseModel):
     title: str = Field(min_length=1, max_length=24)
+    reminder: str = Field(min_length=1, max_length=80, pattern=r"^[^\r\n]+$")
     tasks: list[str] = Field(min_length=1)
 
 
 class CalibrationConfig(BaseModel):
     enabled: bool = False
+    resume_reminder_minutes: int = Field(default=10, gt=0)
     prompts: dict[str, str]
     conditions: dict[str, Condition]
 

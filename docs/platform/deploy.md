@@ -114,10 +114,24 @@ The checked-in study flag is `studies.qc_calibration.enabled: false` in
 closed. Keep the fixed study prompts `S12577` and `C0482` inactive in the main
 prompt pool.
 
-For the staging verification, first check available RAM and free root disk
-space. Restore the latest droplet-side backup into staging as above. In the
-staging checkout only, set the study flag to true before building the staging
-image. Keep `WHATSAPP_SENDS_DISABLED=true`, verify the Compose project uses
+Set `STUDY_QC_CALIBRATION_ENABLED=true` in production `.env` or in staging
+`.env.staging` to enable the study in that stack. Set it to `false` to switch
+the study off, or remove the setting to use the YAML default. The API and
+worker read the environment supplied at container startup. After editing the
+file, recreate both services so they use the new values:
+
+```bash
+# Use this in the production checkout for an approved production toggle.
+docker compose up -d --no-deps --force-recreate api worker
+# Use this in the staging checkout for a staging toggle.
+staging up -d --wait --no-deps --force-recreate api worker
+```
+
+For staging verification, first check available RAM and free root disk space.
+Restore the latest droplet-side backup into staging as above. Run the main
+fixture with the override set to `false`, then set it to `true` in staging
+only and recreate the staging API and worker. Keep
+`WHATSAPP_SENDS_DISABLED=true`, verify the Compose project uses
 its own services and has no published ports, and enroll the synthetic
 participant (look up its participant ID by the `staging-smoke` batch):
 

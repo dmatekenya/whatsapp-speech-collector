@@ -15,6 +15,7 @@ from src.config import get_settings
 from src.logging_config import setup_logging
 from src.storage.db import get_async_session
 from src.storage.queue import get_inbound_queue
+from src.studies.qc_calibration.config import get_config as get_calibration_config
 from src.tasks.config import get_collection_config
 from src.version import build_info
 
@@ -28,6 +29,7 @@ EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     get_settings()
+    get_calibration_config()
     yield
 
 

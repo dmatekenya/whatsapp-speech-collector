@@ -12,6 +12,7 @@ from sqlalchemy import func, select, text
 
 from scripts.enroll import main as enroll
 from scripts.export_calibration_clips import main as export
+from src.config import Settings
 from src.registry.enrollments import EXPERIMENT, MAIN, active_enrollment
 from src.storage import db
 from src.storage.models import Assignment, CalibrationClip, CalibrationState, Enrollment, Prompt, Recording
@@ -72,6 +73,20 @@ def progress(cutoff):
             (lifetime_minutes(session, "P0001"), minutes_recorded(session, "P0001")),
             {prompt_id: prompt_coverage(session, prompt_id, cutoff) for prompt_id in ids},
         )
+
+
+@pytest.mark.parametrize(("value", "expected"), [(None, False), ("true", True), ("false", False)])
+def test_startup_study_flag_from_dotenv(tmp_path, monkeypatch, value, expected):
+    monkeypatch.delenv("STUDY_QC_CALIBRATION_ENABLED", raising=False)
+    env = tmp_path / ".env"
+    env.write_text("" if value is None else f"STUDY_QC_CALIBRATION_ENABLED={value}\n")
+    settings = Settings(_env_file=env)
+    monkeypatch.setattr("src.studies.qc_calibration.config.get_settings", lambda: settings)
+    get_config.cache_clear()
+    try:
+        assert get_config().enabled is expected
+    finally:
+        get_config.cache_clear()
 
 
 def test_flag_off_uses_paused_reply(client, channels):

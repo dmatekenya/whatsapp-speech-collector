@@ -7,7 +7,7 @@ from random import Random
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from src.config import PROJECT_ROOT
+from src.config import PROJECT_ROOT, get_settings
 
 STUDY = "qc_calibration"
 TASKS = {"sentence", "conversation_starter", "free_speech", "silence"}
@@ -38,7 +38,9 @@ class CalibrationConfig(BaseModel):
 @lru_cache
 def get_config() -> CalibrationConfig:
     path = PROJECT_ROOT / "config/studies/qc_calibration.yaml"
-    return CalibrationConfig.model_validate(yaml.safe_load(path.read_text())["studies"][STUDY])
+    config = CalibrationConfig.model_validate(yaml.safe_load(path.read_text())["studies"][STUDY])
+    override = get_settings().study_qc_calibration_enabled
+    return config if override is None else config.model_copy(update={"enabled": override})
 
 
 def initial_attributes(participant_id: str, round_name: str) -> dict[str, list[str]]:

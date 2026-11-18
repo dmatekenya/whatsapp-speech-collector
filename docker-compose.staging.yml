@@ -81,6 +81,8 @@ services:
 
   redis:
     image: redis:7
+    volumes:
+      - staging_redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -94,3 +96,4 @@ networks:
 volumes:
   staging_audio:
   staging_postgres:
+  staging_redis:

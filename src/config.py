@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     # ===
     app_env: str = "development"
     whatsapp_sends_disabled: bool = False
+    study_qc_calibration_enabled: bool | None = None
     staging_meta_audio_fixture: Path | None = None
     # Bot message catalog: messages/bot_messages_{bot_language}.yaml
     bot_language: str = "en"

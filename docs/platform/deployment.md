@@ -205,89 +205,41 @@ prompts (section 4).
 (2-routine-operations)=
 ## 2. Routine operations
 
-### 2.1 Update the code
+### 2.1 Deploy a release
 
-1. **On your Mac:** run the tests, check that nothing private is staged, then commit and push:
+1. Run the regression tests and test the reviewed commit on staging using
+   `docker-compose.staging.yml`. Use the Meta test number and a dedicated
+   `.env.staging`. The staging project keeps its database, Redis and audio
+   storage separate. Verify prompt delivery, audio storage and the version
+   and commit reported by `/health`.
+2. Tag the tested commit. On the droplet, take a `pg_dump` with
+   `./scripts/backup_db.sh` and confirm the backup exists before applying
+   migrations. Add any new required settings to the production environment.
+3. Run `./scripts/deploy.sh v0.1.0` with the intended tag. The migrate
+   service runs `alembic upgrade head` before the API and worker start.
+   Check `docker compose ps`, the migration logs and `/health`.
 
-   ```bash
-   uv run pytest -q
-   git status          # no .env, .env.production, data/ or backups/ files
-   git add -A && git commit -m "..." && git push
-   ```
+Settings are read when containers start. After changing a setting, recreate
+the API and worker containers.
 
-2. **On the droplet:** take a backup (migrations may run), then pull:
+### 2.2 Roll back a release
 
-   ```bash
-   cd /home/dun/WhatsApp-speech-collector
-   ./scripts/backup_db.sh
-   ls -lh backups/ | tail -2              # a new, non-empty .dump file
-   git pull --ff-only
-   ```
+For an additive migration, leave the database at its upgraded revision. Stop
+the API and worker, check out the previous release tag, and rebuild its image.
+Start the previous code without running its migration service. Existing
+enrollments and recording attributions remain in the database. The previous
+release predates study routing, so suspend experiment traffic before switching
+back to it.
 
-3. If the update adds settings, add them to `.env` (`nano .env`) **before** deploying. This lists
-   settings that are in the template but missing from `.env` (names only):
-
-   ```bash
-   grep -o '^[A-Z_]*=' .env.production.example | sort > /tmp/a
-   grep -o '^[A-Z_]*=' .env | sort > /tmp/b
-   comm -23 /tmp/a /tmp/b
-   ```
-
-4. Deploy. `deploy.sh` pulls again (nothing new by now), rebuilds, applies new migrations and
-   restarts what changed. Data and settings are kept.
-
-   ```bash
-   ./scripts/deploy.sh
-   ```
-
-5. Check:
-
-   ```bash
-   docker compose ps
-   docker compose logs migrate --tail 10  # "Running upgrade ..." lines, or nothing to do; no errors
-   curl -s https://bot.zazoai.com/health  # {"status":"ok"}
-   ```
-
-Settings are read only when the containers start. After changing `.env` or a file in `config/`
-(other than `config/asr_batch.yaml`, see section 6), run
-`docker compose up -d --force-recreate api worker`. A config change pushed through git is picked
-up by `./scripts/deploy.sh`.
-
-### 2.2 Roll back a bad update
-
-`deploy.sh` runs `git pull`, which stops on an older, checked-out commit. To run older code, build
-and start it directly instead. **On the droplet:**
-
-1. Find the last good commit, and check whether the bad update added migrations:
-
-   ```bash
-   cd /home/dun/WhatsApp-speech-collector
-   git log --oneline -5
-   git diff --stat <good-commit> HEAD -- migrations/versions    # empty: no new migrations
-   ```
-
-2. **Only if it added migrations:** step the database back while the new code is still in place
-   (the old code doesn't know the newer schema, and its `migrate` would fail):
-
-   ```bash
-   ./scripts/backup_db.sh
-   docker compose stop api worker
-   docker compose run --rm migrate alembic downgrade -1    # once per new migration file
-   ```
-
-   A downgrade removes the new columns and whatever they held. If a migration damaged data,
-   restore the backup taken before the update instead (2.4). That also loses anything received
-   since.
-3. Check out the good commit, then build and start it:
-
-   ```bash
-   git checkout <good-commit>
-   docker compose build
-   docker compose up -d --remove-orphans
-   docker compose ps
-   ```
-
-4. Later, return to the latest code with `git checkout main`, then `./scripts/deploy.sh`.
+```bash
+# =====================
+# REDEPLOY PREVIOUS TAG
+# =====================
+docker compose stop api worker
+git switch --detach refs/tags/<previous-tag>
+APP_GIT_COMMIT="$(git rev-parse HEAD)" docker compose build
+docker compose up -d --no-deps api worker
+```
 
 ### 2.3 Backups
 
@@ -649,7 +601,7 @@ docker compose logs -f api worker                        # live activity
 docker compose exec postgres psql -U speech -d speech_collector -c \
   "select channel, status, count(*) from outbound_messages where created_at > now() - interval '1 day' group by 1, 2;"
 docker compose exec postgres psql -U speech -d speech_collector -c \
-  "select qc_status, qc_reason, length_flag, count(*) from recordings where created_at > now() - interval '1 day' group by 1, 2, 3;"
+  "select qc_status, qc_reason, length_flag, count(*) from main_recordings where created_at > now() - interval '1 day' group by 1, 2, 3;"
 ```
 
 These are worth a closer look:
@@ -978,7 +930,7 @@ deploy between rounds, not mid-round:
 
    ```bash
    docker compose exec postgres psql -U speech -d speech_collector -c \
-     "select id, created_at from recordings where status = 'stored' and qc_status = 'pending'
+     "select id, created_at from main_recordings where status = 'stored' and qc_status = 'pending'
         and created_at < now() - interval '5 minutes';"
    ```
 
@@ -995,7 +947,7 @@ deploy between rounds, not mid-round:
    ```bash
    docker compose exec postgres psql -U speech -d speech_collector -c \
      "select coalesce(a.prompt_type, 'unassigned') as task_type, r.qc_final, count(*), round(sum(r.duration_s)::numeric / 60, 1) as minutes
-      from recordings r left join assignments a on a.id = r.assignment_id
+      from main_recordings r left join assignments a on a.id = r.assignment_id
       where r.status = 'stored' group by 1, 2 order by 1, 2;"
    ```
 

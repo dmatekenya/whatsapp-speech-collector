@@ -6,7 +6,7 @@
 # applies migrations (the migrate service) and restarts what changed.
 # Safe to re-run; it's also how you update later.
 #
-#   ./scripts/deploy.sh
+#   ./scripts/deploy.sh v0.1.0
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,7 +27,16 @@ mkdir -p data/audio data/participants data/prompts data/asr_batches data/qc back
 # ======
 # UPDATE
 # ======
-git pull --ff-only
+if [ "$#" -eq 1 ]; then
+    git fetch --tags
+    git switch --detach "refs/tags/$1"
+elif [ "$#" -eq 0 ]; then
+    git pull --ff-only
+else
+    echo "Usage: $0 [release-tag]" >&2
+    exit 2
+fi
+export APP_GIT_COMMIT="$(git rev-parse HEAD)"
 docker compose build --pull
 docker compose up -d --remove-orphans
 

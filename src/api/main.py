@@ -15,6 +15,7 @@ from src.logging_config import setup_logging
 from src.storage.db import get_async_session
 from src.storage.queue import get_inbound_queue
 from src.tasks.config import get_collection_config
+from src.version import build_info
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ def _signature_ok(request: Request, params: dict[str, str]) -> bool:
 # ======
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", **build_info()}
 
 
 @app.post("/whatsapp/webhook")

@@ -1,0 +1,75 @@
+# ===================
+# STAGING COMPOSE
+# ===================
+name: whatsapp-speech-collector-staging
+
+x-app: &app
+  image: whatsapp-speech-collector-staging:local
+  pull_policy: never
+  env_file: .env.staging
+  environment:
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: speech_collector_staging
+    REDIS_URL: redis://redis:6379/0
+    WHATSAPP_PROVIDER: meta
+    AUDIO_ROOT: /staging-audio
+  volumes:
+    - staging_audio:/staging-audio
+
+services:
+  migrate:
+    <<: *app
+    build:
+      context: .
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GIT_COMMIT: ${APP_GIT_COMMIT:-unknown}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    ports:
+      - "127.0.0.1:${STAGING_API_PORT:-8001}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *app
+    command: ["rq", "worker", "inbound", "outbound", "--with-scheduler", "--url", "redis://redis:6379/0"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17
+    env_file: .env.staging
+    environment:
+      POSTGRES_DB: speech_collector_staging
+    volumes:
+      - staging_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d speech_collector_staging"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  staging_audio:
+  staging_postgres:

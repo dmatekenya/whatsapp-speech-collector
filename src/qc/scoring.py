@@ -36,6 +36,7 @@ from src.storage.models import (
     Participant,
     QcResult,
     Recording,
+    main_recordings,
     Transcript,
 )
 
@@ -118,36 +119,37 @@ def _latest_transcripts(model: str):
 
 def select_items(db: Session, config: QcConfig, filters: Filters) -> list[Item]:
     latest = _latest_transcripts(config.model)
+    clips = main_recordings.c
     query = (
         select(
-            Recording.id, Recording.participant_id, Recording.duration_s, Recording.active_seconds,
-            Recording.mean_dbfs, Recording.snr_db, Recording.wav_path,
+            clips.id, clips.participant_id, clips.duration_s, clips.active_seconds,
+            clips.mean_dbfs, clips.snr_db, clips.wav_path,
             Assignment.prompt_type, Assignment.prompt_id, Assignment.prompt_text_snapshot,
             latest.c.transcript_id, latest.c.text, latest.c.avg_logprob,
         )
-        .join(latest, latest.c.recording_id == Recording.id)
-        .join(Assignment, Assignment.id == Recording.assignment_id)  # unassigned: not scored
-        .join(Participant, Participant.participant_id == Recording.participant_id)
-        .where(Recording.status == "stored", Recording.qc_status != "rejected")
-        .order_by(Recording.id)
+        .join(latest, latest.c.recording_id == clips.id)
+        .join(Assignment, Assignment.id == clips.assignment_id)  # unassigned: not scored
+        .join(Participant, Participant.participant_id == clips.participant_id)
+        .where(clips.status == "stored", clips.qc_status != "rejected")
+        .order_by(clips.id)
     )
     if not filters.include_test:
         query = query.where(Participant.is_test.is_(False))
     if filters.recording_ids:
-        query = query.where(Recording.id.in_(filters.recording_ids))
+        query = query.where(clips.id.in_(filters.recording_ids))
     if filters.participants:
-        query = query.where(Recording.participant_id.in_(filters.participants))
+        query = query.where(clips.participant_id.in_(filters.participants))
     if filters.since:
         start = datetime(filters.since.year, filters.since.month, filters.since.day, tzinfo=LOCAL_TZ)
-        query = query.where(Recording.created_at >= start)
+        query = query.where(clips.created_at >= start)
     if filters.batch_id is not None:
         query = query.where(
-            exists().where(Transcript.recording_id == Recording.id, Transcript.batch_id == filters.batch_id)
+            exists().where(Transcript.recording_id == clips.id, Transcript.batch_id == filters.batch_id)
         )
     if not filters.rescore:
         query = query.where(
             ~exists().where(
-                QcResult.recording_id == Recording.id, QcResult.thresholds_version == config.thresholds_version
+                QcResult.recording_id == clips.id, QcResult.thresholds_version == config.thresholds_version
             )
         )
     if filters.limit is not None:
@@ -324,24 +326,25 @@ def run_scoring(
 def count_untranscribed(db: Session, config: QcConfig, filters: Filters) -> int:
     """Eligible recordings (stored, not rejected, assigned, not test unless include_test) with
     no transcript from the configured model yet: waiting for the ASR batch."""
+    clips = main_recordings.c
     has_transcript = exists().where(
-        Transcript.recording_id == Recording.id, Transcript.source == "asr", Transcript.model_key == config.model
+        Transcript.recording_id == clips.id, Transcript.source == "asr", Transcript.model_key == config.model
     )
     query = (
-        select(func.count(Recording.id))
-        .join(Assignment, Assignment.id == Recording.assignment_id)
-        .join(Participant, Participant.participant_id == Recording.participant_id)
-        .where(Recording.status == "stored", Recording.qc_status != "rejected", ~has_transcript)
+        select(func.count(clips.id))
+        .join(Assignment, Assignment.id == clips.assignment_id)
+        .join(Participant, Participant.participant_id == clips.participant_id)
+        .where(clips.status == "stored", clips.qc_status != "rejected", ~has_transcript)
     )
     if not filters.include_test:
         query = query.where(Participant.is_test.is_(False))
     if filters.recording_ids:
-        query = query.where(Recording.id.in_(filters.recording_ids))
+        query = query.where(clips.id.in_(filters.recording_ids))
     if filters.participants:
-        query = query.where(Recording.participant_id.in_(filters.participants))
+        query = query.where(clips.participant_id.in_(filters.participants))
     if filters.since:
         start = datetime(filters.since.year, filters.since.month, filters.since.day, tzinfo=LOCAL_TZ)
-        query = query.where(Recording.created_at >= start)
+        query = query.where(clips.created_at >= start)
     return db.scalar(query) or 0
 
 
@@ -381,27 +384,28 @@ def stored_rows(db: Session, config: QcConfig, filters: Filters) -> list[ReportR
         .order_by(QcResult.recording_id, QcResult.created_at.desc(), QcResult.id.desc())
         .subquery()
     )
+    clips = main_recordings.c
     query = (
         select(
-            latest, Recording.participant_id, Recording.wav_path, Recording.duration_s,
-            Recording.active_seconds, Recording.mean_dbfs, Recording.snr_db,
+            latest, clips.participant_id, clips.wav_path, clips.duration_s,
+            clips.active_seconds, clips.mean_dbfs, clips.snr_db,
             Assignment.prompt_type, Assignment.prompt_id, Transcript.avg_logprob,
         )
-        .join(Recording, Recording.id == latest.c.recording_id)
-        .join(Assignment, Assignment.id == Recording.assignment_id)
-        .join(Participant, Participant.participant_id == Recording.participant_id)
+        .join(main_recordings, clips.id == latest.c.recording_id)
+        .join(Assignment, Assignment.id == clips.assignment_id)
+        .join(Participant, Participant.participant_id == clips.participant_id)
         .join(Transcript, Transcript.id == latest.c.transcript_id)
         .order_by(latest.c.recording_id)
     )
     if not filters.include_test:
         query = query.where(Participant.is_test.is_(False))
     if filters.recording_ids:
-        query = query.where(Recording.id.in_(filters.recording_ids))
+        query = query.where(clips.id.in_(filters.recording_ids))
     if filters.participants:
-        query = query.where(Recording.participant_id.in_(filters.participants))
+        query = query.where(clips.participant_id.in_(filters.participants))
     if filters.since:
         start = datetime(filters.since.year, filters.since.month, filters.since.day, tzinfo=LOCAL_TZ)
-        query = query.where(Recording.created_at >= start)
+        query = query.where(clips.created_at >= start)
     rows = []
     for row in db.execute(query):
         metrics = {

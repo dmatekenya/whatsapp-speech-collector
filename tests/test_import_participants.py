@@ -143,9 +143,17 @@ def test_batch_option_replaces_the_file_name(clean_db: None, tmp_path: Path) -> 
     assert [p.batch for p in participants()] == ["pilot", "testers", "pilot-2"]
 
 
-def test_batch_option_on_the_command_line(clean_db: None, tmp_path: Path) -> None:
+def test_batch_option_on_the_command_line(
+    clean_db: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from scripts.import_participants import main
+    from src.registry.welcome import get_welcome_config
 
+    welcome = get_welcome_config()
+    monkeypatch.setattr(
+        "src.registry.welcome.get_welcome_config",
+        lambda: welcome.model_copy(update={"send_on_import": False}),
+    )
     path = write_csv(tmp_path, "cohort_04.csv", [ALICE])
     with pytest.raises(SystemExit) as done:
         main([str(path), "--batch", "  pilot  "])

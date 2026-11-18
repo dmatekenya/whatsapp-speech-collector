@@ -4,13 +4,9 @@
     uv run python scripts/import_participants.py data/participants/batch.csv --write-ids
     uv run python scripts/import_participants.py data/participants/batch.csv --batch pilot
 
-Each participant's batch is the CSV's batch column if it has a value, otherwise
---batch, otherwise the file name without extension ("batch" above). Like the
-other defaults, it is set for new participants only: a re-import never changes
-an existing participant's batch unless the batch column says so.
-
-Re-importing the same file is safe: rows are matched by participant_id, or by
-phone number when participant_id is blank, and updated or left alone.
+A new participant's batch comes from the CSV, --batch, or the input file name.
+--round defaults to the same batch. Existing phone numbers receive a new
+enrollment. Reusing the same study and round is an error.
 
 --send-welcome sends the registration welcome (a WhatsApp template, see
 scripts/send_welcome.py) to the participants this import created, after a
@@ -28,6 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.importers.framework import run_import
 from src.importers.participants import DEFAULT_CONFIG, ParticipantImporter
 from src.logging_config import setup_logging
+from src.registry.enrollments import EXPERIMENT, MAIN
 from src.storage.db import get_sync_sessionmaker
 
 
@@ -59,10 +56,14 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="send the registration welcome to new participants (default: send_on_import in config/welcome.yaml)",
     )
+    parser.add_argument("--study", choices=(MAIN, EXPERIMENT), default=MAIN)
+    parser.add_argument("--round", type=_batch, dest="round_name")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     args = parser.parse_args(argv)
 
-    importer = ParticipantImporter.from_file(args.csv, args.config, batch=args.batch)
+    importer = ParticipantImporter.from_file(
+        args.csv, args.config, batch=args.batch, study=args.study, round_name=args.round_name,
+    )
     factory = get_sync_sessionmaker()
     report = run_import(importer, args.csv, factory, dry_run=args.dry_run, write_ids=args.write_ids)
     print(report.render())
@@ -93,7 +94,7 @@ def _welcome(args: argparse.Namespace, importer: ParticipantImporter, factory: s
     if args.dry_run:
         print("Welcome: not sent (dry run).")
         return True
-    if not importer.new_ids:
+    if args.study != MAIN or not importer.new_ids:
         print("Welcome: no new participants, nothing to send.")
         return True
     setup_logging()

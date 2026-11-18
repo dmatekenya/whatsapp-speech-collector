@@ -49,11 +49,14 @@ from src.conversation.states import (  # noqa: F401 - STATES is re-exported
 from src.conversation.messages import Catalog, Rendered, get_catalog
 from src.conversation.outbound import PromptPart, Reply, emit
 from src.logging_config import mask_phone
+from src.registry.enrollments import MAIN, active_enrollment, pause_main_session, received_enrollment
 from src.storage.audio import apply_audio_origin, apply_length_flag
 from src.storage.db import get_sync_sessionmaker
+from src.storage.duplicates import EXPERIMENT_DUPLICATE
 from src.storage.models import (
     Assignment,
     ConversationState,
+    Enrollment,
     InboundMessage,
     OutboundMessage,
     Participant,
@@ -69,8 +72,9 @@ from src.tasks.bank import (
     find_open_assignment,
     get_active_session,
     handle_response,
-    record_failed_attempt,
+    enrollment_limits,
     minutes_recorded,
+    record_failed_attempt,
     skip_assignment,
     start_session,
 )
@@ -487,6 +491,9 @@ class Engine:
                 end_session(self.db, stale.id, "abandoned", self.now)
             return self.offer(turn)
 
+        if turn.recording is not None and turn.recording.qc_reason == EXPERIMENT_DUPLICATE:
+            return self.repeat_prompt(turn, assignment, self.r("problems.duplicate"))
+
         if self._apply_task_rules(turn, assignment):
             # e.g. forwarded or uploaded: never used. The prompt stays open, and it
             # doesn't use up a retake. The reply says which ("forwarded" would be wrong for a file).
@@ -702,6 +709,13 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
         participant = db.scalar(select(Participant).where(Participant.phone_number == message.sender))
         participant_id = participant.participant_id if participant else None
         recording = db.scalar(select(Recording).where(Recording.inbound_message_id == message.id))
+        active = active_enrollment(db, participant_id, received_at=message.received_at) if participant else None
+        received = None
+        if recording is not None and recording.enrollment_id is not None:
+            received = db.get(Enrollment, recording.enrollment_id)
+        elif participant is not None:
+            received = received_enrollment(db, participant_id, message.received_at)
+        main_clip = received is None or received.study == MAIN
         if participant is None:
             reply = _unregistered_reply(db, message, catalog, now)
         elif participant.status == "withdrawn":
@@ -710,12 +724,23 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
             reply = Reply(parts=[catalog.render("participant.completed")])
         elif participant.status != "active":
             reply = Reply(parts=[catalog.render("participant.paused")])
+        elif active is None or received is None or active.id != received.id or active.study != MAIN:
+            reply = Reply(parts=[catalog.render("participant.paused")])
         else:
             state = _state_for(db, participant_id)
             before = _snapshot(state)
             turn = Turn(db, message, participant, state, recording, now, _previous_inbound_at(db, message))
             engine = Engine(db, catalog, config, now)
-            reply = engine.handle(turn)
+            limits = enrollment_limits(
+                db, participant, active, config, exclude_recording_id=recording.id if recording else None,
+            )
+            if not limits.exhausted:
+                reply = engine.handle(turn)
+            if limits.exhausted or enrollment_limits(db, participant, active, config).exhausted:
+                pause_main_session(db, participant_id, now)
+                active.status = "completed"
+                engine._set(turn, IDLE, offered_task_type=None, session_id=None)
+                reply = Reply(parts=[catalog.render("participant.completed")])
             engine._commit_context(turn)
             state_snapshot = {"before": before, "after": _snapshot(state)}
             logger.info(
@@ -724,7 +749,8 @@ def respond(message_sid: str, now: datetime | None = None) -> list[int]:
                 message.id,
                 state.state,
             )
-        finish_arrival_checks(recording)
+        if main_clip:
+            finish_arrival_checks(recording)
 
         if reply is None:
             db.commit()

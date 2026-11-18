@@ -12,7 +12,15 @@ x-app: &app
     POSTGRES_PORT: "5432"
     POSTGRES_DB: speech_collector_staging
     REDIS_URL: redis://redis:6379/0
+    APP_ENV: staging
     WHATSAPP_PROVIDER: meta
+    WHATSAPP_SENDS_DISABLED: ${WHATSAPP_SENDS_DISABLED:?Set WHATSAPP_SENDS_DISABLED=true in .env.staging}
+    STAGING_META_AUDIO_FIXTURE: /staging-audio/webhook-fixture.ogg
+    META_ACCESS_TOKEN: ""
+    TWILIO_ACCOUNT_SID: ""
+    TWILIO_AUTH_TOKEN: ""
+    TWILIO_WHATSAPP_NUMBER: ""
+    TWILIO_DELETE_MEDIA: "false"
     AUDIO_ROOT: /staging-audio
   volumes:
     - staging_audio:/staging-audio
@@ -32,8 +40,11 @@ services:
 
   api:
     <<: *app
-    ports:
-      - "127.0.0.1:${STAGING_API_PORT:-8001}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -42,7 +53,12 @@ services:
 
   worker:
     <<: *app
-    command: ["rq", "worker", "inbound", "outbound", "--with-scheduler", "--url", "redis://redis:6379/0"]
+    command:
+      - sh
+      - -ec
+      - |
+        python -c "from src.config import get_settings; get_settings()"
+        exec rq worker inbound outbound --with-scheduler --url redis://redis:6379/0
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -69,6 +85,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+networks:
+  default:
+    internal: true
 
 volumes:
   staging_audio:

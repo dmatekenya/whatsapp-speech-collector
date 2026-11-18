@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request, Response
@@ -24,7 +25,13 @@ get_collection_config()
 
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
-app = FastAPI(title="whatsapp-speech-collector")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    get_settings()
+    yield
+
+
+app = FastAPI(title="whatsapp-speech-collector", lifespan=lifespan)
 app.include_router(media_router)
 app.include_router(meta.router)
 

@@ -207,11 +207,7 @@ prompts (section 4).
 
 ### 2.1 Deploy a release
 
-1. Run the regression tests and test the reviewed commit on staging using
-   `docker-compose.staging.yml`. Use the Meta test number and a dedicated
-   `.env.staging`. The staging project keeps its database, Redis and audio
-   storage separate. Verify prompt delivery, audio storage and the version
-   and commit reported by `/health`.
+1. Run the regression tests and follow the [staging verification checklist](deploy.md#staging-on-the-droplet).
 2. Tag the tested commit. On the droplet, take a `pg_dump` with
    `./scripts/backup_db.sh` and confirm the backup exists before applying
    migrations. Add any new required settings to the production environment.
@@ -222,24 +218,11 @@ prompts (section 4).
 Settings are read when containers start. After changing a setting, recreate
 the API and worker containers.
 
+After deploying, follow the [production post-deploy checklist](deploy.md#production-post-deploy-checklist).
+
 ### 2.2 Roll back a release
 
-For an additive migration, leave the database at its upgraded revision. Stop
-the API and worker, check out the previous release tag, and rebuild its image.
-Start the previous code without running its migration service. Existing
-enrollments and recording attributions remain in the database. The previous
-release predates study routing, so suspend experiment traffic before switching
-back to it.
-
-```bash
-# =====================
-# REDEPLOY PREVIOUS TAG
-# =====================
-docker compose stop api worker
-git switch --detach refs/tags/<previous-tag>
-APP_GIT_COMMIT="$(git rev-parse HEAD)" docker compose build
-docker compose up -d --no-deps api worker
-```
+Use the [previous production tag commands](deploy.md#redeploy-the-previous-production-tag).
 
 ### 2.3 Backups
 
@@ -1054,24 +1037,11 @@ droplet's.
 uv run alembic upgrade head
 uv run uvicorn src.api.main:app --port 8000
 uv run rq worker inbound outbound --with-scheduler --worker-class rq.worker.SimpleWorker
-ngrok http 8000            # or with your reserved ngrok domain: ngrok http --url=<your-domain> 8000
 ```
 
-**Connect a WhatsApp number to the laptop.** Meta allows **one webhook URL per app**, so the
-production app must keep pointing at the droplet while contributors are active. Use one of these:
-
-- **A separate Meta dev app (recommended).** Create a second Meta app (e.g. "Tiyankhuleni dev")
-  with Meta's free test number. Point its webhook at `https://<your-ngrok-url>/webhooks/meta`, and
-  put its values in your laptop's settings.
-- **The production app, only temporarily.** Do this only when no contributors are active (never
-  during a run). Point its webhook at ngrok, test, then set it back to
-  `https://bot.zazoai.com/webhooks/meta` and check for `Meta webhook verified` in the droplet's
-  API log.
-- **The Twilio WhatsApp sandbox.** Use the sandbox number (e.g. `+14155238886`) for
-  `TWILIO_WHATSAPP_NUMBER` and your ngrok URL for `PUBLIC_BASE_URL` in your laptop's settings.
-  Set the **sandbox's** "When a message comes in" URL to `https://<your-ngrok-url>/whatsapp/webhook`.
-  Your test phone joins by sending the sandbox's `join <code>` message. Never point the production
-  Twilio sender at ngrok.
+Use the simulated Meta payloads in `tests/meta_payloads.py` for local
+webhook checks. For the isolated staging workflow and handset verification
+after deploying to production, see [release verification](deploy.md).
 
 ### Testing the containers on your Mac (optional)
 

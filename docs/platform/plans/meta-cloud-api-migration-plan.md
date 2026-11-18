@@ -57,7 +57,7 @@ to-do on detecting forwarded or uploaded audio.
   connected to the chatbot. `META_VERIFY_TOKEN`, `META_APP_SECRET`.
 - uvicorn access-log filter redacts `hub.verify_token` from logged URLs.
 - Deploy to the droplet; callback URL `https://bot.zazoai.com/webhooks/meta`; subscribe to the
-  `messages` field; confirm events arrive from the test number.
+  `messages` field; confirm signed fixture events in staging.
 
 ### Phase 1 — MetaChannel adapter, replies on the arrival channel
 
@@ -82,23 +82,11 @@ to-do on detecting forwarded or uploaded audio.
   forwarded, statuses incl. `failed` with error codes, batched events), plus routing tests: a
   Meta-triggered reply goes via Meta, a Twilio-triggered one via Twilio.
 
-### Phase 2 — Parity test on the Meta test number
+### Phase 2 — Verify with simulated webhooks
 
-The test number can message only a handful of verified recipient numbers, which is enough for
-you plus a few colleagues. Repeat the live test from 25 October:
-
-- [ ] Greeting → progress → instructions → ready → sentence
-- [ ] Too-short voice note → retake
-- [ ] Swipe-reply to an older sentence binds correctly
-- [ ] Images in session, caption variants
-- [ ] Conversation starters; switching task type when a target is reached
-- [ ] Unregistered number handled, nothing stored
-- [ ] Delivery statuses reach `read`
-- [ ] New: forwarded voice note and uploaded audio file are flagged
-- [ ] Audio saved as `.ogg` + 16 kHz `.wav` in the participant's folder
-- [ ] Replies arrive from the number the participant wrote to
-
-Optional while here: a "Ready" reply button.
+Use signed payloads from the test suite to verify text, voice notes, swipe
+replies, delivery statuses, and forwarded or uploaded audio. Follow the
+[staging verification steps](../deploy.md#staging-on-the-droplet).
 
 ### Phase 3 — Production setup in Meta
 
@@ -111,7 +99,7 @@ Optional while here: a "Ready" reply button.
   number for Cloud API.
 - Display name approval and business profile (name, photo, description).
 - Subscribe the app to the WhatsApp Business Account (`POST /{waba-id}/subscribed_apps`). Without
-  this, the production number sends no webhooks even though the test number did.
+  this, the production number sends no webhooks.
 - Payment method on the WhatsApp Business Account (needed for any template messages).
 - Webhook stays `https://bot.zazoai.com/webhooks/meta`.
 

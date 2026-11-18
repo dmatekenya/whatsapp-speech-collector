@@ -11,7 +11,9 @@ Errors and logs never include tokens, media URLs, phone numbers or message text.
 import hashlib
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -89,12 +91,17 @@ class MetaChannel:
         phone_number_id: str | None,
         graph_version: str = "v23.0",
         transport: httpx.BaseTransport | None = None,
+        *,
+        sends_disabled: bool = False,
+        audio_fixture: Path | None = None,
     ) -> None:
         self._access_token = access_token or None
         self._phone_number_id = phone_number_id or None
         self._graph_version = graph_version
         # Tests pass an httpx.MockTransport; nothing else should.
         self._transport = transport
+        self._sends_disabled = sends_disabled
+        self._audio_fixture = audio_fixture
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -201,6 +208,11 @@ class MetaChannel:
         """GET /{media-id} for a short-lived URL, then fetch it with the token."""
         if not message.media_id:
             raise ValueError("Message has no media")
+        if self._audio_fixture is not None:
+            try:
+                return self._audio_fixture.read_bytes()
+            except OSError:
+                raise MediaDownloadError("Could not read the staging audio fixture") from None
         if not self._access_token:
             raise MediaDownloadError(f"Media download failed: META_ACCESS_TOKEN is not set")
         # httpx errors embed the URL; re-raise without it (and without chaining).
@@ -231,6 +243,8 @@ class MetaChannel:
     # SENDING
     # =======
     def _send(self, to: str, fields: dict[str, Any]) -> str:
+        if self._sends_disabled:
+            return f"stub-{uuid4().hex}"
         if not self._access_token or not self._phone_number_id:
             raise MessageSendError(
                 "Meta isn't configured: set META_ACCESS_TOKEN and META_PHONE_NUMBER_ID", permanent=True

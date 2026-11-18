@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from src.audio.convert import probe, to_wav
 from src.audio.levels import SpeechLevels, measure_wav
-from src.channels.base import TWILIO, ChannelAdapter, MediaDeleteError, audio_origin
+from src.channels.base import META, TWILIO, ChannelAdapter, MediaDeleteError, audio_origin
 from src.channels.base import InboundMessage as ChannelMessage
 from src.channels.factory import get_channel
 from src.config import get_settings
@@ -19,7 +19,9 @@ from src.conversation.locks import lock_conversation
 from src.conversation.engine import respond
 from src.conversation.outbound import enqueue_send
 from src.logging_config import mask_phone, setup_logging
-from src.registry.enrollments import MAIN, received_enrollment
+from src.registry.enrollments import MAIN, active_enrollment, received_enrollment
+from src.studies.qc_calibration import flow as calibration
+from src.studies.qc_calibration.config import STUDY, get_config as get_calibration_config
 from src.registry.participants import find_active_participant
 from src.storage.audio import (
     AudioStorage,
@@ -322,6 +324,7 @@ def process_inbound(message_sid: str) -> None:
             message.attempts,
         )
 
+        calibration_claim = None
         try:
             # Only active, registered participants are processed; nothing is
             # downloaded for anyone else. A re-run after they register (e.g.
@@ -346,7 +349,18 @@ def process_inbound(message_sid: str) -> None:
                 return
             message.participant_id = participant.participant_id
 
-            audio_stored = not is_audio or _process_audio(session, message, participant)
+            should_store = is_audio
+            if is_audio and message.channel == META and get_calibration_config().enabled:
+                lock_conversation(session, message.sender)
+                active = active_enrollment(session, participant.participant_id, received_at=message.received_at)
+                received = received_enrollment(session, participant.participant_id, message.received_at)
+                if received is not None and received.study == STUDY:
+                    should_store = calibration.enabled(message, active, received) and calibration.prepare_audio(
+                        session, active, message,
+                    )
+                    if should_store:
+                        calibration_claim = received.id
+            audio_stored = not should_store or _process_audio(session, message, participant)
             # The engine sees the stored recording (duration, hash); it runs
             # before the message is marked processed so a failure is retried.
             session.commit()
@@ -357,6 +371,10 @@ def process_inbound(message_sid: str) -> None:
             session.commit()
         except Exception as exc:
             session.rollback()
+            if calibration_claim is not None:
+                lock_conversation(session, message.sender)
+                if not _has_stored_recording(session, message.id):
+                    calibration.release_failed_audio(session, calibration_claim, message.id)
             message.status = "failed"
             message.error = _error_text(exc)
             session.commit()

@@ -211,7 +211,7 @@ prompts (section 4).
 2. Tag the tested commit. On the droplet, take a `pg_dump` with
    `./scripts/backup_db.sh` and confirm the backup exists before applying
    migrations. Add any new required settings to the production environment.
-3. Run `./scripts/deploy.sh v0.1.0` with the intended tag. The migrate
+3. From the production `main` checkout, run `./scripts/deploy.sh`. The migrate
    service runs `alembic upgrade head` before the API and worker start.
    Check `docker compose ps`, the migration logs and `/health`.
 
@@ -222,7 +222,7 @@ After deploying, follow the [production post-deploy checklist](deploy.md#product
 
 ### 2.2 Roll back a release
 
-Use the [previous production tag commands](deploy.md#redeploy-the-previous-production-tag).
+Use the [merge-revert rollback instructions](deploy.md#roll-back-by-reverting-the-merge).
 
 ### 2.3 Backups
 

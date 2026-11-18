@@ -56,8 +56,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ===
 # A non-root user. APP_UID should match the owner of ./data on the host (the
 # bind mount), usually 1000 for the first user on Ubuntu.
+ARG APP_VERSION=0.6.0
 ARG APP_GIT_COMMIT=unknown
-ENV APP_GIT_COMMIT=${APP_GIT_COMMIT}
+ENV APP_VERSION=${APP_VERSION} \
+    APP_GIT_COMMIT=${APP_GIT_COMMIT}
 ARG APP_UID=1000
 RUN useradd --create-home --uid "${APP_UID}" app \
     && mkdir -p /app/data /staging-audio \

@@ -38,11 +38,13 @@ from src.storage.db import get_sync_sessionmaker
 from src.storage.models import (
     Assignment,
     ConversationState,
+    Enrollment,
     InboundMessage,
     OutboundMessage,
     Participant,
     TaskSession,
 )
+from src.studies.qc_calibration.config import STUDY, get_config as get_calibration_config
 from src.tasks.bank import AssignmentClosedError, end_session, mark_sent
 from src.tasks.config import get_collection_config
 
@@ -302,6 +304,18 @@ def send_outbound(
             return None
         to = _recipient(db, outbound)
 
+        if outbound.purpose in ("calibration_reply", "calibration_done"):
+            lock_conversation(db, to)
+            enrollment = db.get(Enrollment, outbound.message_keys[0]["enrollment_id"])
+            required_status = "completed" if outbound.purpose == "calibration_done" else "active"
+            if not get_calibration_config().enabled or enrollment is None or enrollment.study != STUDY or (
+                enrollment.status != required_status
+            ):
+                outbound.error = "Calibration enrollment is no longer eligible for this reply"
+                _not_delivered(db, outbound, "failed", now)
+                db.commit()
+                return None
+
         template = is_template(outbound)
         window = get_collection_config().reply_window_hours
         age = None if template else _hours_since_last_message(db, to, outbound.channel, now)
@@ -320,6 +334,12 @@ def send_outbound(
         try:
             if template:
                 sid = _send_template(adapter, to, outbound)
+            elif outbound.interactive:
+                method = "send_interactive_list" if outbound.interactive["type"] == "list" else "send_reply_buttons"
+                send_interactive = getattr(adapter, method, None)
+                if send_interactive is None:
+                    raise MessageSendError("Channel does not support interactive messages", permanent=True)
+                sid = send_interactive(to, outbound.body, outbound.interactive["action"])
             elif outbound.media_prompt_id:
                 url = build_media_url(outbound.media_prompt_id)
                 sid = adapter.send_media(to, url, caption=outbound.body or None, status_callback=callback)

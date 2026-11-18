@@ -107,22 +107,73 @@ fixture participant. Inspect the worker logs if a job is still pending or failed
    cutoff for prompt coverage. Check that the handset's messages caused no
    changes to those participants' progress.
 
-### Redeploy the previous production tag
+## QC calibration verification
 
-For this additive migration, keep the upgraded database. Pause experiment
-traffic before switching to the previous code. Run from the production checkout
-with Bash and enter the known-good production tag when prompted.
+The checked-in study flag is `studies.qc_calibration.enabled: false` in
+`config/studies/qc_calibration.yaml`. The default deployment keeps the study
+closed. Keep the fixed study prompts `S12577` and `C0482` inactive in the main
+prompt pool.
+
+For the staging verification, first check available RAM and free root disk
+space. Restore the latest droplet-side backup into staging as above. In the
+staging checkout only, set the study flag to true before building the staging
+image. Keep `WHATSAPP_SENDS_DISABLED=true`, verify the Compose project uses
+its own services and has no published ports, and enroll the synthetic
+participant (look up its participant ID by the `staging-smoke` batch):
+
+```bash
+read -r -p 'Fixture participant ID: ' fixture_participant_id
+staging exec -T api python -m scripts.enroll enroll "$fixture_participant_id" qc_calibration stage1
+```
+
+Post a signed text greeting as above. To simulate a button or list selection,
+use the actual ID from the latest fixture reply in
+`outbound_messages.interactive`. Construct a fixture with `text(sender, "fixture")`,
+remove its `text` key, and set `type="interactive"` and
+`interactive={"type": kind, kind: {"id": reply_id, "title": "Fixture"}}`, with
+`kind` equal to `list_reply` for a menu row or `button_reply` for an action.
+Sign and post it to the same loopback endpoint.
+
+Select C3, tap Ready, post audio, then tap Re-record and post audio again. Tap
+Next and post the free-speech clip. Confirm the prompt and reply sequence,
+attempts 1 and 2, stored audio, and the absence of a sentence slot or assignment
+rows. Compare prompt coverage and main progress with a baseline taken before
+the fixture turns. Verify replies use stub IDs. Run `staging down -v` and
+confirm the staging Postgres volume is gone.
+
+For a separately approved live check, first enable the study in the deployed
+configuration. Verify `P0023` is still the registered test handset with
+`is_test = true`. Record its active main enrollment and the pre-check progress
+and coverage. Enroll it in `qc_calibration` for the test round and repeat the
+C3 sequence from the handset on the production WhatsApp number. Verify the
+results in the database, then resume its previous main enrollment if it is
+still in the study.
+
+### Roll back by reverting the merge
+
+Pause study traffic and resume the main enrollment for participants in the
+study before reverting. Create a rollback branch from current `origin/main`.
+Revert the Part B merge and retain its migration file in the revert commit.
 
 ```bash
 set -e
-read -r -p 'Previous production tag: ' previous_tag
-git rev-parse --verify "refs/tags/${previous_tag}^{commit}"
-docker compose stop api worker
-git switch --detach "refs/tags/${previous_tag}"
-APP_GIT_COMMIT="$(git rev-parse HEAD)" docker compose build migrate
-docker compose up -d --no-deps --force-recreate api worker
-docker compose ps api worker
+git fetch origin main
+git switch -c revert/qc-calibration origin/main
+read -r -p 'Part B merge commit: ' merge_commit
+git revert -m 1 --no-commit "$merge_commit"
+migration=migrations/versions/e81c4d29b702_qc_calibration.py
+git restore --source=HEAD --staged --worktree -- "$migration"
+git diff --cached --check
+git commit -m "Revert QC calibration app and retain its Alembic revision"
 ```
 
-Check production `/health` for the previous commit. The `--no-deps` flag
-keeps the previous Alembic runner from starting against the upgraded schema.
+Review and merge the rollback PR to `main`, then run `./scripts/deploy.sh`
+with no arguments from the production `main` checkout. Confirm the checkout
+and API container are on the reverted commit, the migrate service exited
+successfully, and the API is healthy. The reverted app may report its legacy
+version in `/health`; check the checkout SHA and container's
+`APP_GIT_COMMIT` as well.
+
+This works because the Part B migration is additive and the previous app can
+use the upgraded schema. A migration that changes or removes existing schema
+or data needs its own rollback plan.

@@ -18,7 +18,7 @@ from src.importers.framework import (
     next_id,
     peek_next_id,
 )
-from src.registry.enrollments import MAIN, activate, enrollment_status
+from src.registry.enrollments import MAIN, activate, enrollment_status, initialize_study
 from src.registry.participants import normalize_phone
 from src.storage.models import Enrollment, Participant
 
@@ -161,11 +161,13 @@ class ParticipantImporter(BatchImporter):
                 **values,
             ))
             session.flush()
-            session.add(Enrollment(
+            enrollment = Enrollment(
                 participant_id=participant_id, study=self.study or MAIN,
                 round=self.round_name or values["batch"], status=enrollment_status(values["status"]),
                 starts_on=values["enrolled_on"],
-            ))
+            )
+            initialize_study(enrollment)
+            session.add(enrollment)
             ids[row.number] = participant_id
             self.new_ids.append(participant_id)
         session.flush()
@@ -191,6 +193,7 @@ class ParticipantImporter(BatchImporter):
             if status == "active":
                 activate(session, participant, enrollment)
             else:
+                initialize_study(enrollment)
                 session.add(enrollment)
         report.counts["re-enrolled"] += 1
         return True

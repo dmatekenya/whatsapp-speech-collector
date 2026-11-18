@@ -56,6 +56,7 @@ class InboundMessage:
     # Meta only: "no", "forwarded" or "frequently_forwarded" (None for Twilio).
     forwarded: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+    interactive_reply_id: str | None = None
 
 
 def audio_origin(message: InboundMessage) -> str:

@@ -137,6 +137,36 @@ class EnrollmentActivation(Base):
     deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CalibrationState(Base):
+    __tablename__ = "calibration_state"
+
+    enrollment_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("enrollments.id"), primary_key=True)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=sql_text("'{}'::jsonb"))
+
+
+class CalibrationClip(Base):
+    __tablename__ = "calibration_clips"
+    __table_args__ = (
+        UniqueConstraint("enrollment_id", "condition_code", "task_position", "attempt",
+                         name="uq_calibration_clips_attempt"),
+        CheckConstraint("task_position >= 1 AND attempt >= 1 AND order_position BETWEEN 1 AND 10",
+                        name="ck_calibration_clips_positions"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    recording_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("recordings.id"), unique=True)
+    enrollment_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("enrollments.id"))
+    condition_code: Mapped[str] = mapped_column(Text)
+    task_type: Mapped[str] = mapped_column(Text)
+    task_position: Mapped[int]
+    prompt_id: Mapped[str | None] = mapped_column(Text, ForeignKey("prompts.prompt_id"))
+    attempt: Mapped[int]
+    suggested_condition: Mapped[str] = mapped_column(Text)
+    order_position: Mapped[int]
+    fast_qc: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Prompt(Base):
     """A prompt shown to participants: text to read, a question, or an image.
 
@@ -493,6 +523,7 @@ class OutboundMessage(Base):
     # {"before": {"state", "context"}, "after": {...}}. If the reply isn't
     # delivered, the state goes back to "before" (unless a later turn moved on).
     state_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    interactive: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

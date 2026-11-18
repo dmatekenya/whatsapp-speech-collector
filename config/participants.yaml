@@ -62,4 +62,4 @@ lifetime_cap_minutes:
   pilot: 80
 studies:
   main: {counts_toward_lifetime: true}
-  aq_experiment: {counts_toward_lifetime: false}
+  qc_calibration: {counts_toward_lifetime: false}

@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.UniqueConstraint("participant_id", "study", "round", name="uq_enrollments_study_round"),
-        sa.CheckConstraint("study IN ('main', 'aq_experiment')", name="ck_enrollments_study"),
+        sa.CheckConstraint("study IN ('main', 'qc_calibration')", name="ck_enrollments_study"),
         sa.CheckConstraint("status IN ('active', 'paused', 'completed', 'withdrawn')", name="ck_enrollments_status"),
         sa.CheckConstraint("target_minutes >= 0", name="ck_enrollments_target_minutes"),
     )

@@ -12,7 +12,7 @@ from src.conversation.locks import lock_conversation
 from src.storage.models import Assignment, ConversationState, Enrollment, EnrollmentActivation, Participant, TaskSession
 
 MAIN = "main"
-EXPERIMENT = "aq_experiment"
+EXPERIMENT = "qc_calibration"
 
 
 # =======

@@ -66,7 +66,7 @@ outside a session, kept outside task targets. Eligible unassigned minutes count 
 
 ## Studies and enrollment
 
-An enrollment identifies a participant, a study (`main` or `aq_experiment`)
+An enrollment identifies a participant, a study (`main` or `qc_calibration`)
 and a round. A participant may have several enrollments and at most one active
 enrollment. The database enforces unique participant, study and round
 combinations and enforces the active limit with a partial unique index.

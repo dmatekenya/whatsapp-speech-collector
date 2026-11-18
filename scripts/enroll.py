@@ -1,4 +1,9 @@
-"""Manage study enrollments without creating new participant records."""
+"""Manage study enrollments without creating new participant records.
+
+    uv run python -m scripts.enroll enroll P0001 qc_calibration stage1
+    uv run python -m scripts.enroll resume P0001 main pilot
+    uv run python -m scripts.enroll list P0001
+"""
 
 import argparse
 

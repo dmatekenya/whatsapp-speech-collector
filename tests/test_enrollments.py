@@ -64,8 +64,9 @@ def test_switch_uses_receipt_time_and_pauses_main_session(client, channels):
     main = _active()
     _enter_main_session(client)
     main_pending = _enqueue_voice(client)
-    enroll(["enroll", PARTICIPANT, EXPERIMENT, "stage1"])
+    enroll(["enroll", PARTICIPANT, "qc_calibration", "stage1"])
     experiment = _active()
+    assert experiment.study == "qc_calibration"
 
     with db.get_sync_sessionmaker()() as session:
         assert session.scalar(select(TaskSession.status)) == "paused"

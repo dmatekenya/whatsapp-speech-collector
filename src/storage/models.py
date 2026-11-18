@@ -108,7 +108,7 @@ class Enrollment(Base):
         UniqueConstraint("participant_id", "study", "round", name="uq_enrollments_study_round"),
         Index("uq_enrollments_active", "participant_id", unique=True,
               postgresql_where=sql_text("status = 'active'")),
-        CheckConstraint(_in_check("study", ("main", "aq_experiment")), name="ck_enrollments_study"),
+        CheckConstraint(_in_check("study", ("main", "qc_calibration")), name="ck_enrollments_study"),
         CheckConstraint(_in_check("status", ("active", "paused", "completed", "withdrawn")),
                         name="ck_enrollments_status"),
         CheckConstraint("target_minutes >= 0", name="ck_enrollments_target_minutes"),

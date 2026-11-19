@@ -304,7 +304,7 @@ def send_outbound(
             return None
         to = _recipient(db, outbound)
 
-        if outbound.purpose in ("calibration_reply", "calibration_done"):
+        if outbound.purpose in ("calibration_reply", "calibration_review", "calibration_done"):
             lock_conversation(db, to)
             enrollment = db.get(Enrollment, outbound.message_keys[0]["enrollment_id"])
             required_status = "completed" if outbound.purpose == "calibration_done" else "active"

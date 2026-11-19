@@ -2,17 +2,26 @@ menu: Choose a recording condition. You can follow the suggested order or pick a
 menu_button: Conditions
 ready: Ready
 continue: Continue
-task_header: "{code} · {name} ({reminder}) — Task {slot} of {total}"
+task_header: "*{code} · {name}* ({reminder}) — Task {slot} of {total}"
 saved_after_break: Clip saved.
 change: Change condition
 next: Next
 retake: Re-record
 recorded: Clip saved. Continue or record another attempt at this clip.
 done: Thank you! You have completed the audio calibration study.
-sentence: "Record yourself reading this sentence: {prompt}"
-conversation_starter: "Record a spoken answer to this question: {prompt}"
-free_speech: Record yourself speaking about any topic you choose.
-silence: "Record 10–15 seconds without speaking. This is silence clip {slot} of {total}."
+progress: "{done} of {total} conditions done."
+condition_done: "{code} done ✅. {progress}"
+duration_feedback: "That was {seconds} {unit}; please aim for {minimum}–{maximum} seconds."
+instructions:
+  sentence: "Read this sentence aloud:"
+  conversation_starter: "Answer this question:"
+  free_speech: "Talk about anything you like:"
+  silence: "Stay silent:"
+duration_guidance:
+  speech: "Aim for {minimum}–{maximum} seconds, no more than {cap}"
+  silence: "Stay silent for {minimum}–{maximum} seconds"
+duration_cap_minute: 1 minute
+duration_cap_seconds: "{seconds} seconds"
 conditions:
   C1: In a quiet room, hold your phone as you normally would and speak clearly.
   C2: Hold your phone normally and speak very quietly.

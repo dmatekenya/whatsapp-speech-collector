@@ -90,12 +90,22 @@ def _suggested(order: list[str], completed: list[str]) -> str:
     return next(code for code in order if code not in completed)
 
 
-def _menu(order: list[str], context: dict) -> tuple[str, dict]:
+def _progress(order: list[str], context: dict, completed_condition: str | None) -> str:
+    done = len(set(order).intersection(context["completed"]))
+    progress = messages()["progress"].format(done=done, total=len(order))
+    if completed_condition is not None:
+        return messages()["condition_done"].format(code=completed_condition, progress=progress)
+    return progress
+
+
+def _menu(order: list[str], context: dict, completed_condition: str | None) -> tuple[str, dict]:
     config = get_config()
     completed = context["completed"]
     suggested = _suggested(order, completed)
     rows = []
     for code, condition in config.conditions.items():
+        if code not in order:
+            continue
         count = len(condition.tasks)
         paused = context.get("paused", {}).get(code)
         done = count if code in completed else (len(_completed_slots(paused)) if paused else 0)
@@ -105,7 +115,8 @@ def _menu(order: list[str], context: dict) -> tuple[str, dict]:
         if code == suggested:
             progress += " · Suggested"
         rows.append({"id": f"cal:{context['token']}:{code}", "title": condition.title, "description": progress})
-    return messages()["menu"], {
+    progress = _progress(order, context, completed_condition)
+    return f"{progress}\n\n{messages()['menu']}", {
         "type": "list",
         "action": {"button": messages()["menu_button"], "sections": [{"rows": rows}]},
     }
@@ -136,29 +147,64 @@ def _task_header(context: dict) -> str:
 def _task_body(db: Session, context: dict) -> str:
     task = _task(context)
     prompt = _prompt(db, task)
-    count = len(get_config().conditions[context["condition"]].tasks)
-    return messages()[task].format(prompt=prompt.text if prompt else "", slot=context["slot"], total=count)
+    parts = [f"*{messages()['instructions'][task]}*"]
+    if prompt is not None:
+        parts.append("> " + " ".join(prompt.text.splitlines()))
+    limits = get_config().durations[task]
+    if limits.guidance:
+        catalog = messages()
+        cap = (
+            catalog["duration_cap_minute"] if limits.max_seconds == 60
+            else catalog["duration_cap_seconds"].format(seconds=limits.max_seconds)
+        )
+        guidance = catalog["duration_guidance"][limits.guidance].format(
+            minimum=limits.min_seconds, maximum=limits.aim_max_seconds or limits.max_seconds, cap=cap,
+        )
+        parts.append(f"_{guidance}_")
+    return "\n\n".join(parts)
+
+
+def _duration_feedback(context: dict, recording: Recording | None) -> str | None:
+    if recording is None or recording.duration_s is None:
+        return None
+    duration = recording.duration_s
+    limits = get_config().durations[_task(context)]
+    if limits.min_seconds <= duration <= limits.max_seconds:
+        return None
+    seconds = f"{duration:.2f}".rstrip("0").rstrip(".")
+    return messages()["duration_feedback"].format(
+        seconds=seconds, unit="second" if seconds == "1" else "seconds",
+        minimum=limits.min_seconds, maximum=limits.aim_max_seconds or limits.max_seconds,
+    )
 
 
 def _render(
-    db: Session, order: list[str], context: dict, *, clip_saved: bool, resumed: bool,
+    db: Session, order: list[str], context: dict, *, saved_clip: Recording | None, resumed: bool,
+    completed_condition: str | None,
 ) -> tuple[str, dict | None]:
     phase = context["phase"]
     if phase == "menu":
-        return _menu(order, context)
+        return _menu(order, context, completed_condition)
+    feedback = _duration_feedback(context, saved_clip)
     header = _task_header(context)
     token = context["token"]
     if phase in {"setup", "reminder"}:
         instruction = messages()["conditions"][context["condition"]]
         if phase == "setup":
             return _buttons(f"{header}\n{instruction}", token, ("ready", "change"))
-        if clip_saved:
+        if saved_clip is not None:
             instruction = f"{instruction}\n\n{messages()['saved_after_break']}"
+            if feedback:
+                instruction = f"{instruction} {feedback}"
         return _buttons(f"{header}\n{instruction}", token, ("continue", "change"))
     if phase == "review":
-        body = _task_body(db, context) if resumed else messages()["recorded"]
-        return _buttons(f"{header}\n{body}", token, ("next", "retake"))
-    return f"{header}\n{_task_body(db, context)}", None
+        if resumed:
+            return _buttons(f"{header}\n\n{_task_body(db, context)}", token, ("next", "retake"))
+        if feedback:
+            body = f"{messages()['saved_after_break']} {feedback}"
+            return _buttons(f"{header}\n{body}", token, ("retake", "next"))
+        return _buttons(f"{header}\n{messages()['recorded']}", token, ("next", "retake"))
+    return f"{header}\n\n{_task_body(db, context)}", None
 
 
 def _save_clip(db: Session, enrollment: Enrollment, context: dict, recording: Recording) -> None:
@@ -268,15 +314,16 @@ def respond(
         phase in {"setup", "record", "review"} and last_activity is not None
         and message.received_at - last_activity > timedelta(minutes=get_config().resume_reminder_minutes)
     )
-    finished = resumed = clip_saved = False
+    finished = resumed = False
+    saved_clip = completed_condition = None
     if context.get("pending") is not None:
         if recording is None or not save_reserved_clip(db, enrollment, message, recording):
             return []
         context = dict(state.context)
-        clip_saved = True
+        saved_clip = recording
     if overdue:
         context.update(phase="reminder", resume_phase=context["phase"], token=message.id)
-    elif clip_saved:
+    elif saved_clip is not None:
         pass  # The reserved recording already moved the turn to review.
     elif phase == "reminder" and action in {"continue", "change"}:
         if action == "change":
@@ -287,7 +334,7 @@ def respond(
             resumed = True
         del context["resume_phase"]
         context["token"] = message.id
-    elif phase == "menu" and action in get_config().conditions and action not in context["completed"]:
+    elif phase == "menu" and action in order and action not in context["completed"]:
         paused = dict(context.get("paused", {}))
         saved = paused.pop(action, None)
         if saved is None:
@@ -310,21 +357,37 @@ def respond(
                            completed_slots=completed_slots)
         else:
             completed = [*context["completed"], condition]
-            finished = len(completed) == len(order)
+            completed_condition = condition
+            finished = all(code in completed for code in order)
             context.update(phase="done" if finished else "menu", completed=completed, token=message.id)
             if finished:
                 _complete(db, participant, enrollment)
     context["last_activity_at"] = max(last_activity or message.received_at, message.received_at).isoformat()
     state.context = context
-    body, interactive = (messages()["done"], None) if finished else _render(
-        db, order, context, clip_saved=clip_saved, resumed=resumed,
-    )
-    row = OutboundMessage(
+    if finished:
+        progress = _progress(order, context, completed_condition)
+        body, interactive = f"{progress}\n\n{messages()['done']}", None
+    else:
+        body, interactive = _render(
+            db, order, context, saved_clip=saved_clip, resumed=resumed, completed_condition=completed_condition,
+        )
+    rows = [OutboundMessage(
         inbound_message_id=message.id, participant_id=participant.participant_id,
         purpose="calibration_done" if finished else "calibration_reply",
         body=body, channel=META, interactive=interactive,
         message_keys=[{"key": STUDY, "enrollment_id": enrollment.id}],
-    )
-    db.add(row)
+    )]
+    if resumed and interactive and len(body) > 1024:
+        # Send a long resumed prompt as text, then offer the review buttons separately.
+        rows[0].interactive = None
+        review_body, buttons = _render(
+            db, order, context, saved_clip=None, resumed=False, completed_condition=None,
+        )
+        rows.append(OutboundMessage(
+            inbound_message_id=message.id, participant_id=participant.participant_id,
+            purpose="calibration_review", sequence=2, body=review_body, channel=META, interactive=buttons,
+            message_keys=[{"key": STUDY, "enrollment_id": enrollment.id}],
+        ))
+    db.add_all(rows)
     db.flush()
-    return [row.id]
+    return [row.id for row in rows]

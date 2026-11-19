@@ -142,7 +142,7 @@ def test_c3_has_three_tasks_and_all_conditions_resume_main(client, study):
         for _ in get_config().conditions[condition].tasks:
             clip(client)
             tap(client, "next")
-    assert "Thank you" in outbound_rows()[-1].body
+    assert outbound_rows()[-1].body.startswith("C10 done ✅. 10 of 10 conditions done.\n\nThank you")
     with db.get_sync_sessionmaker()() as session:
         assert active_enrollment(session, "P0001").study == MAIN
         assert session.scalar(select(Enrollment.status).where(Enrollment.study == EXPERIMENT)) == "completed"
@@ -190,7 +190,7 @@ def test_silence_is_stored_with_observational_qc(client, study, tmp_path, monkey
     assert key == {"rater_clip_id": rater_clip["clip_id"], "clip_id": metadata[0]["clip_id"]}
 
 
-C3_HEADER = "C3 · Arm's length (phone 60–70 cm away) — Task {slot} of 3"
+C3_HEADER = "*C3 · Arm's length* (phone 60–70 cm away) — Task {slot} of 3"
 C3_SETUP = "Hold the phone at arm's length (about 60–70 cm) and speak normally."
 
 
@@ -221,7 +221,7 @@ def test_task_and_ack_headers_follow_slot(client, study):
     clip(client)
     saved = outbound_rows()[-1]
     assert saved.body.splitlines()[0] == C3_HEADER.format(slot=1)
-    assert titles(saved) == ["Next", "Re-record"]
+    assert titles(saved) == ["Re-record", "Next"]
     tap(client, "next")
     assert outbound_rows()[-1].body.splitlines()[0] == C3_HEADER.format(slot=2)
 
@@ -231,7 +231,7 @@ def test_no_resume_reminder_within_threshold(client, study, elapsed):
     start_c3(client)
     row = after_activity(client, mp.text(WA_ID, "Hi"), elapsed=elapsed)
     assert row.interactive is None
-    assert row.body == f"{C3_HEADER.format(slot=1)}\nRecord yourself reading this sentence: Fixed sentence."
+    assert row.body == f"{C3_HEADER.format(slot=1)}\n\n*Read this sentence aloud:*\n\n> Fixed sentence."
 
 
 def test_text_after_gap_shows_setup_and_continue_resends_prompt(client, study, monkeypatch):
@@ -249,7 +249,7 @@ def test_text_after_gap_shows_setup_and_continue_resends_prompt(client, study, m
 def test_late_voice_note_is_saved_and_continue_keeps_review(client, study):
     start_c3(client)
     row = after_activity(client, mp.voice_note(WA_ID), elapsed=timedelta(minutes=11))
-    assert row.body == f"{C3_HEADER.format(slot=1)}\n{C3_SETUP}\n\nClip saved."
+    assert row.body == f"{C3_HEADER.format(slot=1)}\n{C3_SETUP}\n\nClip saved. That was 2 seconds; please aim for 5–45 seconds."
     assert titles(row) == ["Continue", "Change condition"]
     tap(client, "continue")
     review = outbound_rows()[-1]
@@ -348,6 +348,111 @@ def test_existing_c3_clips_and_attempts_survive_the_restored_sentence(client, st
             ("free_speech", 2, 1), ("sentence", 3, 1),
         ]
         assert "C3" in session.scalars(select(CalibrationState.context)).one()["completed"]
+
+
+def test_exact_whatsapp_task_prompts(client, study):
+    start_c3(client)
+    assert outbound_rows()[-1].body == (
+        "*C3 · Arm's length* (phone 60–70 cm away) — Task 1 of 3\n\n"
+        "*Read this sentence aloud:*\n\n> Fixed sentence."
+    )
+    clip(client)
+    tap(client, "next")
+    assert outbound_rows()[-1].body == (
+        "*C3 · Arm's length* (phone 60–70 cm away) — Task 2 of 3\n\n"
+        "*Answer this question:*\n\n> Fixed conversation?\n\n"
+        "_Aim for 15–45 seconds, no more than 1 minute_"
+    )
+    clip(client)
+    tap(client, "next")
+    assert outbound_rows()[-1].body == (
+        "*C3 · Arm's length* (phone 60–70 cm away) — Task 3 of 3\n\n"
+        "*Talk about anything you like:*\n\n_Aim for 15–45 seconds, no more than 1 minute_"
+    )
+    clip(client)
+    tap(client, "next")
+    choose(client, "C9")
+    tap(client, "ready")
+    assert outbound_rows()[-1].body == (
+        "*C9 · Silence in a quiet room* (stay silent in a quiet room) — Task 1 of 3\n\n"
+        "*Stay silent:*\n\n_Stay silent for 10–15 seconds_"
+    )
+
+
+def set_clip_seconds(study, seconds):
+    wav = io.BytesIO()
+    with wave.open(wav, "wb") as handle:
+        handle.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        handle.writeframes(b"\0\0" * 16000 * seconds)
+    study.meta.media = wav.getvalue()
+
+
+def test_soft_duration_feedback_keeps_attempts_and_both_review_actions(client, study):
+    start_c3(client)
+    clip(client)
+    tap(client, "next")
+    for seconds in (9, 61, 60):
+        set_clip_seconds(study, seconds)
+        clip(client)
+        row = outbound_rows()[-1]
+        assert row.body.splitlines()[0] == C3_HEADER.format(slot=3 if seconds == 60 else 2)
+        if seconds != 60:
+            assert row.body.splitlines()[1] == f"Clip saved. That was {seconds} seconds; please aim for 15–45 seconds."
+            assert titles(row) == ["Re-record", "Next"]
+            tap(client, "retake" if seconds == 9 else "next")
+        else:
+            # A 60-second free-speech clip is at the inclusive upper boundary.
+            assert row.body.splitlines()[1] == "Clip saved. Continue or record another attempt at this clip."
+            assert titles(row) == ["Next", "Re-record"]
+    with db.get_sync_sessionmaker()() as session:
+        saved = session.execute(
+            select(CalibrationClip.task_type, CalibrationClip.attempt, Recording.duration_s,
+                   Recording.status, Recording.qc_status)
+            .join(Recording, CalibrationClip.recording_id == Recording.id)
+            .order_by(CalibrationClip.id)
+        ).all()[1:]
+        assert [tuple(row[:4]) for row in saved] == [
+            ("conversation_starter", 1, 9, "stored"), ("conversation_starter", 2, 61, "stored"),
+            ("free_speech", 1, 60, "stored"),
+        ]
+        assert all(row.qc_status != "rejected" for row in saved)
+
+
+def test_progress_uses_enrollment_conditions_and_announces_completion(client, study):
+    with db.get_sync_sessionmaker().begin() as session:
+        enrollment = active_enrollment(session, "P0001")
+        enrollment.attributes = {**enrollment.attributes, "condition_order": ["C1", "C2", "C3", "C4", "C5"]}
+    from_meta(client, mp.text(WA_ID, "Hi"))
+    assert outbound_rows()[-1].body.splitlines()[0] == "0 of 5 conditions done."
+    with db.get_sync_sessionmaker().begin() as session:
+        state = session.scalars(select(CalibrationState)).one()
+        state.context = {**state.context, "completed": ["C1", "C2", "C3"]}
+    from_meta(client, mp.text(WA_ID, "Hi"))
+    menu = outbound_rows()[-1]
+    assert menu.body.splitlines()[0] == "3 of 5 conditions done."
+    rows = menu.interactive["action"]["sections"][0]["rows"]
+    c4 = next(row for row in rows if row["id"].endswith(":C4"))
+    interactive(client, c4["id"], "list_reply")
+    tap(client, "ready")
+    for _ in range(3):
+        clip(client)
+        tap(client, "next")
+    assert outbound_rows()[-1].body.splitlines()[0] == "C4 done ✅. 4 of 5 conditions done."
+
+
+def test_long_resumed_prompt_uses_separate_review_buttons(client, study):
+    original = "First line.\n" + "Continue this sentence. " * 45
+    with db.get_sync_sessionmaker().begin() as session:
+        sentence = session.scalars(select(Prompt).where(Prompt.prompt_id == "S12577")).one()
+        sentence.text = original
+    start_c3(client)
+    after_activity(client, mp.voice_note(WA_ID), elapsed=timedelta(minutes=11))
+    tap(client, "continue")
+    prompt, review = outbound_rows()[-2:]
+    assert len(prompt.body) > 1024 and prompt.interactive is None
+    assert "> " + " ".join(original.splitlines()) in prompt.body
+    assert len(review.body) <= 1024 and titles(review) == ["Next", "Re-record"]
+    assert review.provider_message_id.startswith("stub-")
 
 
 def test_additive_migration_round_trip(clean_db):

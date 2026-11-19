@@ -86,7 +86,7 @@ to-do on detecting forwarded or uploaded audio.
 
 Use signed payloads from the test suite to verify text, voice notes, swipe
 replies, delivery statuses, and forwarded or uploaded audio. Follow the
-[staging verification steps](../deploy.md#staging-on-the-droplet).
+{ref}`staging verification steps <staging-on-the-droplet>`.
 
 ### Phase 3 — Production setup in Meta
 

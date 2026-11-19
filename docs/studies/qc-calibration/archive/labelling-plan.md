@@ -1,5 +1,7 @@
 # Audio Quality Labelling Plan
 
+> Superseded by the QC calibration study protocol and methodology (2026-11-18); kept for history.
+
 Last updated: 2026-11-11. Part of the audio-quality experiments ([handover.md](handover.md)).
 
 Three raters score about 540 clips (3 hours) for audio quality on four simple questions, over 2–3

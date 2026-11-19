@@ -1,6 +1,6 @@
 # QC calibration methodology
 
-The study collects voice notes under the ten [recording conditions](protocol.md#table-1-recording-conditions)
+The study collects voice notes under the ten {ref}`recording conditions <table-1-recording-conditions>`
 to calibrate audio-quality checks. The requested condition describes the setup.
 Raters assess the clips independently.
 

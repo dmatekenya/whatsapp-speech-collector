@@ -6,7 +6,7 @@ The project collects about 500 hours of Chichewa speech through a WhatsApp bot (
 build an open speech-recognition dataset, funded through Masakhane. A 3-day pilot with 16
 contributors ran from 9 November 2026; the main collection follows in weekly rounds. This page
 explains the whole project and what to read. The audio-quality experiments have their own handover:
-[audio-quality/handover.md](speech-recordings/audio-quality/handover.md).
+[audio-quality handover archive](studies/qc-calibration/archive/handover.md).
 
 ## Reading list, in order
 
@@ -70,7 +70,7 @@ then NLP/AI work on the data).
 The automatic checks can tell whether a sentence was read correctly, but not yet whether a recording
 is noisy, distant or muffled. The audio-quality experiments build a labelled audio-quality set
 (staged recordings plus pilot clips, rated by three people) and use it to calibrate those checks.
-See [audio-quality/handover.md](speech-recordings/audio-quality/handover.md), which links to the recording guide and
+See [audio-quality handover archive](studies/qc-calibration/archive/handover.md), which links to the recording guide and
 the labelling plan.
 
 ## Rules for working with the data and the repo

@@ -31,7 +31,7 @@ Use the authenticated reviewer's identifier and a fresh UUID operation key for
 each new action. `note` is optional. Keep participant names and phone numbers
 out of notes.
 
-```sql
+```postgresql
 INSERT INTO public.calibration_clip_checks
     (recording_id, as_intended, note, reviewer, operation_key)
 VALUES

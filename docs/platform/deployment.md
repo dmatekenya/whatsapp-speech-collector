@@ -207,7 +207,7 @@ prompts (section 4).
 
 ### 2.1 Deploy a release
 
-1. Run the regression tests and follow the [staging verification checklist](deploy.md#staging-on-the-droplet).
+1. Run the regression tests and follow the {ref}`staging verification checklist <staging-on-the-droplet>`.
 2. Tag the tested commit. On the droplet, take a `pg_dump` with
    `./scripts/backup_db.sh` and confirm the backup exists before applying
    migrations. Add any new required settings to the production environment.
@@ -218,11 +218,11 @@ prompts (section 4).
 Settings are read when containers start. After changing a setting, recreate
 the API and worker containers.
 
-After deploying, follow the [production post-deploy checklist](deploy.md#production-post-deploy-checklist).
+After deploying, follow the {ref}`production post-deploy checklist <production-post-deploy-checklist>`.
 
 ### 2.2 Roll back a release
 
-Use the [merge-revert rollback instructions](deploy.md#roll-back-by-reverting-the-merge).
+Use the {ref}`merge-revert rollback instructions <roll-back-by-reverting-the-merge>`.
 
 ### 2.3 Backups
 
@@ -1041,7 +1041,7 @@ uv run rq worker inbound outbound --with-scheduler --worker-class rq.worker.Simp
 
 Use the simulated Meta payloads in `tests/meta_payloads.py` for local
 webhook checks. For the isolated staging workflow and handset verification
-after deploying to production, see [release verification](deploy.md).
+after deploying to production, see [release verification](release-checklist.md).
 
 ### Testing the containers on your Mac (optional)
 

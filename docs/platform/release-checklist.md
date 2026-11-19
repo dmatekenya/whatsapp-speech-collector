@@ -1,5 +1,6 @@
 # Release verification and rollback
 
+(staging-on-the-droplet)=
 ## Staging on the droplet
 
 Use a separate checkout of the reviewed candidate and a fresh staging database.
@@ -87,6 +88,7 @@ ID. Join `recordings` by the audio message's inbound ID and verify `status =
 'stored'`, a populated `wav_path` and an `enrollment_id` belonging to the
 fixture participant. Inspect the worker logs if a job is still pending or failed.
 
+(production-post-deploy-checklist)=
 ## Production post-deploy checklist
 
 1. Confirm the release commit in `/health` and successful migration in
@@ -163,6 +165,7 @@ C3 sequence from the handset on the production WhatsApp number. Verify the
 results in the database, then resume its previous main enrollment if it is
 still in the study.
 
+(roll-back-by-reverting-the-merge)=
 ### Roll back by reverting the merge
 
 Pause study traffic and resume the main enrollment for participants in the

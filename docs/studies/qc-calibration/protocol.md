@@ -4,6 +4,7 @@ Record each assigned clip as a WhatsApp voice note. Wait for the next task
 before recording. Use **Re-record** if you want another attempt at the current
 task. The bot keeps previous attempts.
 
+(table-1-recording-conditions)=
 ## Table 1. Recording conditions
 
 | Code | Condition | Setup | Clips per speaker |

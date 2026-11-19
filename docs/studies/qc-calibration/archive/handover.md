@@ -1,5 +1,7 @@
 # Audio Quality Experiments: Handover
 
+> Superseded by the QC calibration study protocol and methodology (2026-11-18); kept for history.
+
 Last updated: 2026-11-11. Owner: Ange.
 
 Record about 2 hours of deliberately varied audio, have it rated with 1 hour of pilot clips by 3

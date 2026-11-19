@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 # CHECKS
 # ======
 if [ ! -f .env ]; then
-    echo "No .env here. Create it from .env.production.example (see docs/deploy.md)." >&2
+    echo "No .env here. Create it from .env.production.example (see docs/platform/deployment.md)." >&2
     exit 1
 fi
 if ! grep -Eq '^DOMAIN=[^[:space:]]+' .env; then

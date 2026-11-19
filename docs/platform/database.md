@@ -53,6 +53,25 @@ shuffled rater CSV. Keep the adjacent `.key.csv` outside the material sent to
 raters. Neither export includes names or phone numbers.
 
 
+### Calibration review
+
+`calibration_review_clips` projects calibration attempts and the latest study
+check. It includes pseudonymous IDs, `is_test`, condition and task labels,
+duration and level measurements, and the relative WAV path. Participant
+names and phone numbers are excluded. Both `sc_readonly` and
+`masakhane_supervision_ro` can select from the view.
+
+`calibration_clip_checks` is an append-only log keyed by `id`.
+`recording_id` references the unique recording ID in `calibration_clips`.
+Each row stores `as_intended` (`yes`, `no`, or `unclear`), optional `note`,
+`reviewer`, a unique UUID `operation_key`, and `created_at`. The latest
+timestamp and then highest ID determine the current check. The writer
+`masakhane_qc_writer` has `INSERT` and `SELECT` on this table. Study
+checks are independent of `qc_human_reviews` and `qc_final`.
+
+See the [SC calibration study contract](supervision-study-contract.md) for the
+view columns and insert format.
+
 ## How they connect
 
 ```{mermaid}

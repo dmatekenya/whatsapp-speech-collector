@@ -200,7 +200,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--kind", choices=("pictures", "sentences"), default="pictures")
     p.add_argument("--harvest-run", type=Path)
     p.add_argument("--pool-id")
-    p.add_argument("--live-sample", type=int, default=0)
+    p.add_argument("--allocation", choices=("target-share", "gap"), default="target-share",
+                   help="domain allocation for sentence batches")
     p.add_argument("--dollar-street", type=Path)
     p.add_argument("--batch", required=True, help="batch name, e.g. 2026-11-labelling-1")
     p.add_argument("--size", type=int, default=3000)
@@ -217,13 +218,13 @@ def main(argv: list[str] | None = None) -> int:
 
         if not args.pool_id:
             p.error("--pool-id is required for sentence batches")
-        if args.size < 0 or args.live_sample < 0:
-            p.error("--size and --live-sample must be non-negative")
+        if args.size < 0:
+            p.error("--size must be non-negative")
         try:
             write_sentence_batch(
                 named_directory(POOL_ROOT, args.pool_id),
                 named_directory(args.review_root or TEXT_ROOT / "review", args.batch),
-                load_label_settings(), size=args.size, live_sample=args.live_sample, seed=args.seed,
+                load_label_settings(), size=args.size, allocation=args.allocation, seed=args.seed,
             )
         except (FileExistsError, ValueError) as exc:
             p.error(str(exc))

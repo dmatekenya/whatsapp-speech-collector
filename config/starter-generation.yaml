@@ -1,0 +1,67 @@
+model: anthropic/claude-haiku-5.5
+temperature: 0.9
+total: 7000
+domain_shares:
+  family: 15
+  food: 12
+  health: 12
+  agriculture: 11
+  work-trade: 10
+  education: 10
+  transport: 7
+  sport-leisure: 7
+  nature: 6
+  technology: 4
+  culture: 4
+  public-services: 2
+per_call: 20
+max_calls_per_topic: null  # default per topic: ceil(3 * quota / per_call)
+max_spend_usd: 4.0
+max_tokens: 1200
+reasoning: false
+# Estimation rates per million tokens, as configured for sentence labelling.
+input_usd_per_million: 0.10
+output_usd_per_million: 0.50
+banned_phrases:
+  - boma lingachite
+  - amatanthauza chiyani
+  - ubwino ndi kuipa
+  - chipani
+  - ndale
+style_rules:
+  - >-
+    Short: 6–15 words, one main question or invitation. At most one short
+    follow-up ("…ndipo chifukwa chiyani?" sparingly).
+  - >-
+    Light and personal: everyday life, memories, routines, likes, places, small stories.
+    The speaker should be able to talk for 20–40 seconds without needing knowledge
+    or an opinion on policy.
+  - >-
+    Not exam-like: no "Fotokozani ubwino ndi kuipa…", no "Kodi boma lingachite chiyani…",
+    no definitions ("…amatanthauza chiyani?"), no yes/no questions.
+  - >-
+    Vary the openings. Mix questions and invitations: Tiuzeni za…, Fotokozani…,
+    Mumakonda…, Ndi chiyani…, Kumbukirani nthawi…, Mukanakhala ndi…, Ngati…
+    Limit "Kodi" openings to about a quarter of a batch.
+  - >-
+    Safe: no personal identifiers, no illness, money troubles, grief or relationship problems
+    of the speaker, no assumptions about marriage, children or income ("…anu" only for things
+    almost everyone has). No politics or parties (pending the project's decision).
+    No religion-specific assumptions.
+  - >-
+    Natural Malawian Chichewa, everyday words; English loanwords only where people really
+    use them (foni, minibasi, sukulu).
+  - Each starter must fit its given domain and topic.
+examples:
+  family: Tiuzeni za mnzanu wapamtima ndi zimene mumakonda kuchita limodzi.
+  food: Ndi chakudya chiti chimene mumachikonda kwambiri? Mumachiphika bwanji?
+  health: Mumatani kuti mupumule mukatopa kwambiri?
+  agriculture: Fotokozani tsiku limodzi lotanganidwa pa nthawi yokolola.
+  work-trade: Tiuzeni za ntchito yoyamba imene munagwirapo.
+  education: Tiuzeni za mphunzitsi amene simudzamuiwala.
+  transport: Fotokozani ulendo wina wa pa minibasi umene simudzauiwala.
+  sport-leisure: Mumakonda kuchita chiyani Loweruka masana?
+  nature: Kodi nyengo ya mvula imasintha bwanji zochita zanu?
+  technology: Tiuzeni mmene foni yanu imakuthandizirani tsiku ndi tsiku.
+  culture: Fotokozani ukwati wina umene munapitako ndi zimene zinakusangalatsani.
+  public-services: Fotokozani mmene anthu amatungira madzi m'dera lanu.

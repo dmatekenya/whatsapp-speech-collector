@@ -1,0 +1,180 @@
+# =====
+# PATHS
+# =====
+# Raw inputs are read only. Nothing is ever written under raw_root.
+raw_root: data/chichewa-text/raw-articles-books
+nation_xml: nation-articles-wordpress-needs-preprocessing.xml   # relative to raw_root
+malawi_news_dir: malawi-news                                    # relative to raw_root, searched recursively
+# Stage 1 output: one folder per run-id.
+extracted_text_root: data/chichewa-text/extracted-text
+ocr_cache_dir: data/chichewa-text/extracted-text/_ocr-cache
+# Stages 2 and 3 output: one folder per run-id.
+sentences_root: data/prompts/text/extracted-sentences
+# Existing sentence bank: its text is used for the lexicon and for "already_in_bank".
+existing_sentences: data/prompts/text/sentences.csv
+
+# =========
+# PDF PAGES
+# =========
+min_text_layer_words: 100   # letter-only words needed to trust pdftotext output
+ocr_workers: 4
+ocr_lang: eng
+ocr_psm: 3
+ocr_fallback_dpi: 300       # pdftoppm resolution when a page has no single embedded image
+page_skip_keywords:         # case-insensitive; pages containing any of these are skipped
+  - MSCE
+  - Phunziro
+  - ndakatulo
+  - Zithunzi
+  - Mpikisano
+
+# ======
+# BLOCKS
+# ======
+min_headline_words: 15
+drop_cap_repair: true       # text-layer pages only
+ocr_max_line_chars: 70      # OCR blocks with a longer original line are merged columns
+byline_prefixes:
+  - Wolemba
+  - Ndemanga
+byline_ndi_max_words: 4     # "Ndi <name>" blocks with at most this many words after "Ndi"
+photo_credit: Wojambula
+header_patterns:
+  - '(?i)malawi news'
+  - '(?i)\b(?:ti|fi)kambe\b'
+  - '\bZOCHITIKA\b'
+  - '^\s*\d{1,3}\s*$'
+  - '(?i)^(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}\s*[-–—]\s*(?:(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+)?\d{1,2}\s*,?\s*\d{4}\W*$'
+  - '[\w.+-]+@[\w-]+\.[\w.-]+'
+  - '(?:https?://|www\.)\S+'
+
+# =========
+# SENTENCES
+# =========
+# Stage 2 (`sentences`). The word range must match both importer ranges in config/prompts.yaml.
+min_words: 15
+max_words: 55
+group_max_words: 40
+prompts_config: config/prompts.yaml
+prompt_type: sentences
+apostrophe: "'"              # every apostrophe variant is written as this character
+abbreviations:               # a full stop after these does not end a sentence
+  - "Dr"
+  - "Mr"
+  - "Mrs"
+  - "Ms"
+  - "Prof"
+  - "Rev"
+  - "St"
+  - "Mt"
+  - "No"
+  - "Gen"
+  - "Lt"
+  - "Hon"
+  - "Sen"
+  - "T/A"
+english_max_share: 0.2       # share of tokens in english_stopwords above this is "english"
+english_stopwords:           # chosen to avoid common Chichewa words such as "a", "no" and "ndi"
+  - "the"
+  - "and"
+  - "of"
+  - "to"
+  - "in"
+  - "is"
+  - "that"
+  - "for"
+  - "on"
+  - "with"
+  - "as"
+  - "was"
+  - "by"
+  - "at"
+  - "from"
+  - "or"
+  - "be"
+  - "this"
+  - "are"
+  - "an"
+  - "have"
+  - "has"
+  - "they"
+  - "we"
+  - "he"
+  - "she"
+  - "his"
+  - "her"
+  - "their"
+  - "which"
+  - "will"
+  - "would"
+  - "there"
+  - "been"
+  - "were"
+  - "if"
+  - "can"
+  - "not"
+  - "but"
+  - "you"
+  - "your"
+  - "it"
+lexicon_min_count: 2         # a word counts as known when it appears this often in clean text
+ocr_max_unknown_words: 1     # OCR sentences with more unknown words than this are dropped
+political_keywords:          # matched as whole words; all-caps entries are case-sensitive
+  - "MCP"
+  - "DPP"
+  - "UDF"
+  - "UTM"
+  - "PP"
+  - "chipani"
+  - "zisankho"
+  - "aphungu"
+  - "ndale"
+  - "Mutharika"
+  - "Chakwera"
+  - "Muluzi"
+  - "Banda"
+  - "pulezidenti"
+  - "MEC"
+  - "Nyumba ya Malamulo"
+
+# =======
+# DOMAINS
+# =======
+# Stage 3 (`domains`): a text model suggests one domain per kept sentence. Domain keys and
+# boundary rules live in config/domains.yaml.
+domains_config: config/domains.yaml
+backend: openrouter
+base_url: https://openrouter.ai/api/v1
+api_key_env: OPENROUTER_API_KEY
+model: anthropic/claude-haiku-5.5
+batch_size: 25
+max_spend_usd: 4.0           # stop sending batches once this much has been spent in one run
+max_calls: 1000
+temperature: 0
+max_tokens: 8000
+timeout_seconds: 60
+max_retries: 3
+
+# =========================
+# SENTENCE POOL AND LABELLING
+# =========================
+topics_config: config/topics-draft.yaml
+# Published OpenRouter rates per million tokens for the stage 3 model.
+# https://openrouter.ai/anthropic/claude-haiku-5.5
+label_input_usd_per_million: 0.10
+label_output_usd_per_million: 0.50
+
+# Collection manual, Table 6 (9,000 sentences).
+domain_targets:
+  family: 1350
+  food: 1080
+  health: 1080
+  agriculture: 990
+  work-trade: 900
+  education: 900
+  transport: 630
+  sport-leisure: 630
+  nature: 540
+  technology: 360
+  culture: 360
+  public-services: 180

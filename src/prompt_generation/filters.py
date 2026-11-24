@@ -39,7 +39,7 @@ def licence_allowed(licence: str, licence_url: str, allow_non_commercial: bool) 
 
 
 # ================
-# MALAWI RELEVANCE
+# REGION RELEVANCE
 # ================
 
 
@@ -62,6 +62,22 @@ def malawi_signal(c: Candidate, cfg: HarvestConfig) -> str:
     return "none"
 
 
+def africa_signal(c: Candidate, cfg: HarvestConfig) -> bool:
+    """True if the geotag is inside the Africa box or tags/title/description name an African place."""
+    if cfg.africa_bbox.contains(c.lat, c.lon):
+        return True
+    if _contains_any(" | ".join(c.tags).lower(), cfg.africa_place_names):
+        return True
+    return _contains_any(f"{c.title} {c.description}".lower(), cfg.africa_place_names)
+
+
+def region_signal(c: Candidate, cfg: HarvestConfig) -> str:
+    """malawi | africa | none. A Malawi signal takes precedence over an Africa signal."""
+    if c.malawi_signal != "none":
+        return "malawi"
+    return "africa" if africa_signal(c, cfg) else "none"
+
+
 # =============
 # APPLY FILTERS
 # =============
@@ -75,9 +91,10 @@ def year_taken(c: Candidate) -> int | None:
 
 
 def apply_metadata_filters(candidates: list[Candidate], cfg: HarvestConfig) -> None:
-    """Set malawi_signal and drop candidates that fail a metadata rule (in place)."""
+    """Set malawi_signal and region_signal, then drop candidates that fail a metadata rule (in place)."""
     for c in candidates:
         c.malawi_signal = malawi_signal(c, cfg)
+        c.region_signal = region_signal(c, cfg)
 
         ok, reason = licence_allowed(c.licence, c.licence_url, cfg.allow_non_commercial)
         if not ok:
@@ -100,8 +117,11 @@ def apply_metadata_filters(candidates: list[Candidate], cfg: HarvestConfig) -> N
             if c.malawi_signal != "geo":
                 c.drop("no_malawi_signal")
             continue
-        if c.malawi_signal == "none" and cfg.domain(c.query_domain).location == "malawi":
+        location = cfg.domain(c.query_domain).location
+        if location == "malawi" and c.malawi_signal == "none":
             c.drop("no_malawi_signal")
+        elif location == "africa" and c.region_signal == "none":
+            c.drop("no_region_signal")
 
 
 def drop_exact_duplicates(candidates: list[Candidate]) -> None:

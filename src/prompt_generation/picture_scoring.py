@@ -58,6 +58,7 @@ class ScoringConfig:
     include_metadata: bool
     instructions: str
     domains: list[dict[str, str]]
+    reasoning_enabled: bool | None = None
 
     @property
     def domain_keys(self) -> list[str]:
@@ -175,6 +176,8 @@ class OpenRouterClient:
             "max_tokens": self.cfg.max_tokens,
             "usage": {"include": True},  # ask OpenRouter to report the cost of the call
         }
+        if self.cfg.reasoning_enabled is not None:
+            body["reasoning"] = {"enabled": self.cfg.reasoning_enabled}
         delay = 2.0
         for attempt in range(self.cfg.max_retries + 1):
             try:

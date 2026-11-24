@@ -1,0 +1,11 @@
+<View>
+  <Header value="Write down exactly what the speaker says, in Chichewa."/>
+  <Text name="help" value="Write what you hear, including mistakes, repeated or missing words. Do not correct the speaker. Write numbers as words. Mark words you cannot make out as [?]."/>
+  <Audio name="audio" value="$audio" hotkey="space"/>
+  <TextArea name="transcript" toName="audio" rows="4" required="true" maxSubmissions="1"
+            editable="true" placeholder="Transcript"/>
+  <Choices name="confidence" toName="audio" choice="single-radio" required="true" showInline="true">
+    <Choice value="Sure of every word"/>
+    <Choice value="Unsure of some words"/>
+  </Choices>
+</View>

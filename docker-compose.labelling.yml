@@ -1,0 +1,34 @@
+# ==========================================================================================
+# LABEL STUDIO FOR THE QC CALIBRATION LABELLING
+# ==========================================================================================
+# Separate Compose project; does not touch the bot's containers.
+#   docker compose -p labelling -f docker-compose.labelling.yml --env-file .env.labelling up -d
+# Caddy (in the bot's project) proxies https://$LABEL_DOMAIN to this container over the shared
+# Docker network, so no port is published on the droplet.
+
+services:
+  label-studio:
+    image: heartexlabs/label-studio:${LABEL_STUDIO_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      LABEL_STUDIO_HOST: https://${LABEL_DOMAIN}
+      LABEL_STUDIO_USERNAME: ${LABEL_STUDIO_ADMIN_EMAIL}
+      LABEL_STUDIO_PASSWORD: ${LABEL_STUDIO_ADMIN_PASSWORD}
+      LABEL_STUDIO_DISABLE_SIGNUP_WITHOUT_LINK: "true"
+      LOCAL_FILES_SERVING_ENABLED: "true"
+      LOCAL_FILES_DOCUMENT_ROOT: /label-studio/files
+    volumes:
+      - label_studio_data:/label-studio/data
+      # Blind audio bundles only (random file names, no participant IDs). Read-only.
+      - ./data/labelling/bundles:/label-studio/files:ro
+    networks:
+      - bot
+    mem_limit: 1g
+
+volumes:
+  label_studio_data:
+
+networks:
+  bot:
+    external: true
+    name: whatsapp-speech-collector_default

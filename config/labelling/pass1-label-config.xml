@@ -1,0 +1,54 @@
+<View>
+  <Header value="Listen to the whole clip. You may replay it."/>
+  <Audio name="audio" value="$audio" hotkey="space"/>
+
+  <Header value="1. Who can you hear speaking?"/>
+  <Choices name="speaker" toName="audio" choice="single-radio" required="true" showInline="false">
+    <Choice value="One person close to the phone"/>
+    <Choice value="More than one person close to the phone"/>
+    <Choice value="Only people in the background"/>
+    <Choice value="Nobody is speaking"/>
+    <Choice value="Not sure"/>
+  </Choices>
+
+  <View visibleWhen="choice-selected" whenTagName="speaker"
+        whenChoiceValue="One person close to the phone,More than one person close to the phone">
+    <Header value="2. Could you write down what was said?"/>
+    <Text name="t_help" value="Judge whether the sounds are clear, not whether you know the word."/>
+    <Choices name="transcribability" toName="audio" choice="single-radio" showInline="false">
+      <Choice value="All: every word clear"/>
+      <Choice value="Most: one or two words I would guess"/>
+      <Choice value="Some: I follow the meaning but miss phrases"/>
+      <Choice value="Few or none"/>
+    </Choices>
+
+    <Header value="3. Language"/>
+    <Text name="l_help" value="Everyday borrowed words (foni, sukulu, buledi) count as Chichewa."/>
+    <Choices name="language" toName="audio" choice="single-radio" showInline="false">
+      <Choice value="Chichewa"/>
+      <Choice value="Chichewa mixed with another language (whole phrases)"/>
+      <Choice value="Mostly another language"/>
+      <Choice value="Can't tell"/>
+    </Choices>
+  </View>
+
+  <Header value="4. What problems can you hear? Tick all that apply."/>
+  <Choices name="issues" toName="audio" choice="multiple" required="true" showInline="false">
+    <Choice value="No issues"/>
+    <Choice value="Steady background noise"/>
+    <Choice value="Wind"/>
+    <Choice value="Handling noise"/>
+    <Choice value="Background voices (words not understandable)"/>
+    <Choice value="Competing speech (another person's words understandable)"/>
+    <Choice value="Music"/>
+    <Choice value="Echo"/>
+    <Choice value="Far from phone"/>
+    <Choice value="Too quiet"/>
+    <Choice value="Muffled"/>
+    <Choice value="Distortion"/>
+    <Choice value="Cut off"/>
+    <Choice value="Other"/>
+  </Choices>
+  <TextArea name="note" toName="audio" placeholder="Optional note (required if you ticked Other)"
+            rows="2" maxSubmissions="1" editable="true"/>
+</View>

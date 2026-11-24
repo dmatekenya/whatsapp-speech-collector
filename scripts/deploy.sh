@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 # CHECKS
 # ======
 if [ ! -f .env ]; then
-    echo "No .env here. Create it from .env.production.example (see docs/deploy.md)." >&2
+    echo "No .env here. Create it from .env.production.example (see docs/platform/deployment.md)." >&2
     exit 1
 fi
 if ! grep -Eq '^DOMAIN=[^[:space:]]+' .env; then
@@ -27,7 +27,32 @@ mkdir -p data/audio data/participants data/prompts data/asr_batches data/qc back
 # ======
 # UPDATE
 # ======
-git pull --ff-only
+if [ "$#" -eq 1 ]; then
+    git fetch --tags
+    git switch --detach "refs/tags/$1"
+elif [ "$#" -eq 0 ]; then
+    if [ "$(git branch --show-current)" != main ]; then
+        echo "Check out main before deploying." >&2
+        exit 1
+    fi
+    git fetch origin main --tags
+    git merge --ff-only origin/main
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        echo "Local main has commits absent from origin/main." >&2
+        exit 1
+    fi
+else
+    echo "Usage: $0 [release-tag]" >&2
+    exit 2
+fi
+export APP_GIT_COMMIT="$(git rev-parse HEAD)"
+APP_VERSION="$(git describe --tags --match 'v[0-9]*' --exact-match HEAD 2>/dev/null || true)"
+if [ -n "$APP_VERSION" ]; then
+    export APP_VERSION="$APP_VERSION"
+else
+    export APP_VERSION="$(sed -n 's/^APP_VERSION = "\([^"]*\)"$/\1/p' src/version.py)"
+    test -n "$APP_VERSION"
+fi
 docker compose build --pull
 docker compose up -d --remove-orphans
 

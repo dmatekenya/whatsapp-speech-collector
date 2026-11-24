@@ -11,13 +11,17 @@ from sqlalchemy.orm import Session
 
 from src.audio.convert import probe, to_wav
 from src.audio.levels import SpeechLevels, measure_wav
-from src.channels.base import TWILIO, ChannelAdapter, MediaDeleteError, audio_origin
+from src.channels.base import META, TWILIO, ChannelAdapter, MediaDeleteError, audio_origin
 from src.channels.base import InboundMessage as ChannelMessage
 from src.channels.factory import get_channel
 from src.config import get_settings
+from src.conversation.locks import lock_conversation
 from src.conversation.engine import respond
 from src.conversation.outbound import enqueue_send
 from src.logging_config import mask_phone, setup_logging
+from src.registry.enrollments import MAIN, active_enrollment, received_enrollment
+from src.studies.qc_calibration import flow as calibration
+from src.studies.qc_calibration.config import STUDY, get_config as get_calibration_config
 from src.registry.participants import find_active_participant
 from src.storage.audio import (
     AudioStorage,
@@ -29,8 +33,8 @@ from src.storage.audio import (
     resolve_folder,
 )
 from src.storage.db import get_sync_sessionmaker
-from src.storage.duplicates import relink_duplicates
-from src.storage.models import InboundMessage, Recording
+from src.storage.duplicates import flag_experiment_match, lock_recording_hash, relink_duplicates
+from src.storage.models import Enrollment, InboundMessage, Participant, Recording
 from src.storage.queue import get_inbound_queue
 from src.tasks.config import get_collection_config
 
@@ -89,6 +93,7 @@ def _store_recording(
     inbound: ChannelMessage,
     channel: ChannelAdapter,
     storage: AudioStorage,
+    study: str,
 ) -> None:
     """Download, convert and store one voice note, then commit it as 'stored'."""
     participant_id = message.participant_id
@@ -139,15 +144,22 @@ def _store_recording(
     # Meta only; None for Twilio, which doesn't say.
     recording.is_voice_note = inbound.is_voice_note
     recording.forwarded = inbound.forwarded
-    apply_audio_origin(recording, audio_origin(inbound))
-    apply_length_flag(recording)  # default limits; the engine redoes it per task type
+    origin = audio_origin(inbound)
+    if study == MAIN:
+        apply_audio_origin(recording, origin)
+        apply_length_flag(recording)  # the engine reapplies the rules per task type
+    else:
+        recording.audio_origin = origin
+    lock_recording_hash(session, content_sha256)
+    if study == MAIN and recording.enrollment_id is not None:
+        flag_experiment_match(session, recording, message)
     recording.status = "stored"
     recording.error = None
     session.flush()
     # Only flagged here; the conversation engine rejects the duplicate (qc_reason duplicate). If
     # this message arrived before copies that were stored earlier, they get re-pointed at this
     # recording.
-    changes = relink_duplicates(session, content_sha256)
+    changes = relink_duplicates(session, content_sha256, study=study)
     session.commit()
     for change in changes:
         if change.new is not None:
@@ -246,16 +258,22 @@ def _delete_channel_media(
         _schedule_media_deletion(message, label)
 
 
-def _process_audio(session: Session, message: InboundMessage) -> None:
+def _process_audio(session: Session, message: InboundMessage, participant: Participant) -> bool:
     channel = get_channel(message.channel)
     inbound = channel.parse_inbound(message.raw_payload)
 
+    lock_conversation(session, message.sender)
+    enrollment = received_enrollment(session, participant.participant_id, message.received_at)
+    # Preserve backlog recovery for voice notes that arrived before registration.
+    # An already registered participant without an enrollment cannot add new audio.
+    if enrollment is None and participant.created_at <= message.received_at:
+        return False
     # One recording per message: create it or reuse the existing row. Commit
     # the pending row so a later rollback can't remove it, then lock it so
     # concurrent runs for the same message wait for each other.
     session.execute(
         insert(Recording)
-        .values(inbound_message_id=message.id)
+        .values(inbound_message_id=message.id, enrollment_id=enrollment.id if enrollment else None)
         .on_conflict_do_nothing(index_elements=[Recording.inbound_message_id])
     )
     session.commit()
@@ -268,10 +286,13 @@ def _process_audio(session: Session, message: InboundMessage) -> None:
     elif message.media_deleted_at is not None:
         raise MediaGoneError(f"Media for message id={message.id} was deleted before it was stored")
     else:
-        _store_recording(session, recording, message, inbound, channel, get_audio_storage())
+        # A pending row already pins the enrollment across work retries.
+        study = session.scalar(select(Enrollment.study).where(Enrollment.id == recording.enrollment_id)) or MAIN
+        _store_recording(session, recording, message, inbound, channel, get_audio_storage(), study)
 
     # Only after the recording is committed as stored.
     _delete_channel_media(session, message, recording, inbound, channel)
+    return True
 
 
 # ====
@@ -303,6 +324,7 @@ def process_inbound(message_sid: str) -> None:
             message.attempts,
         )
 
+        calibration_claim = None
         try:
             # Only active, registered participants are processed; nothing is
             # downloaded for anyone else. A re-run after they register (e.g.
@@ -327,18 +349,32 @@ def process_inbound(message_sid: str) -> None:
                 return
             message.participant_id = participant.participant_id
 
-            if is_audio:
-                _process_audio(session, message)
+            should_store = is_audio
+            if is_audio and message.channel == META and get_calibration_config().enabled:
+                lock_conversation(session, message.sender)
+                active = active_enrollment(session, participant.participant_id, received_at=message.received_at)
+                received = received_enrollment(session, participant.participant_id, message.received_at)
+                if received is not None and received.study == STUDY:
+                    should_store = calibration.enabled(message, active, received) and calibration.prepare_audio(
+                        session, active, message,
+                    )
+                    if should_store:
+                        calibration_claim = received.id
+            audio_stored = not should_store or _process_audio(session, message, participant)
             # The engine sees the stored recording (duration, hash); it runs
             # before the message is marked processed so a failure is retried.
             session.commit()
             _reply(message.message_sid)
-            message.status = "processed"
+            message.status = "processed" if audio_stored else "unregistered"
             message.processed_at = datetime.now(UTC)
             message.error = None
             session.commit()
         except Exception as exc:
             session.rollback()
+            if calibration_claim is not None:
+                lock_conversation(session, message.sender)
+                if not _has_stored_recording(session, message.id):
+                    calibration.release_failed_audio(session, calibration_claim, message.id)
             message.status = "failed"
             message.error = _error_text(exc)
             session.commit()

@@ -28,7 +28,7 @@ os.environ["AUDIO_ROOT"] = tempfile.mkdtemp(prefix="speech-collector-test-audio-
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 from collections.abc import AsyncIterator, Iterator  # noqa: E402
-from datetime import date  # noqa: E402
+from datetime import UTC, date, datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import fakeredis  # noqa: E402
@@ -48,7 +48,7 @@ from src.channels.twilio import TwilioChannel  # noqa: E402
 from src.config import get_settings  # noqa: E402
 from src.storage import db  # noqa: E402
 from src.storage.audio import get_audio_storage  # noqa: E402
-from src.storage.models import Participant, Recording  # noqa: E402
+from src.storage.models import Enrollment, EnrollmentActivation, Participant, Recording  # noqa: E402
 
 # The sender used by the worker tests; registered as P0001 by fake_channel.
 REGISTERED_SENDER = "+265991234567"
@@ -86,8 +86,8 @@ def clean_db(test_database: None) -> Iterator[None]:
     with db.get_sync_engine().begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE qc_human_reviews, qc_results, transcripts, asr_batches, outbound_messages, conversation_state, assignments,"
-                " sessions, recordings, inbound_messages, participants, prompts RESTART IDENTITY"
+                "TRUNCATE calibration_clip_checks, calibration_clips, calibration_state, qc_human_reviews, qc_results, transcripts, asr_batches, outbound_messages, conversation_state, assignments,"
+                " sessions, recordings, inbound_messages, enrollment_activations, enrollments, participants, prompts RESTART IDENTITY"
             )
         )
         connection.execute(text("ALTER SEQUENCE participant_id_seq RESTART"))
@@ -210,6 +210,19 @@ def add_participant(
                 source_file="test.csv",
             )
         )
+        session.flush()
+        enrollment = Enrollment(
+            participant_id=participant_id, study="main", round="pilot",
+            status="paused" if status == "inactive" else status,
+        )
+        session.add(enrollment)
+        session.flush()
+        if status == "active":
+            # Harness tests replay recorded conversations using a fixed clock.
+            activation = session.scalar(select(EnrollmentActivation).where(
+                EnrollmentActivation.enrollment_id == enrollment.id,
+            ))
+            activation.activated_at = datetime(2020, 1, 1, tzinfo=UTC)
         session.commit()
 
 

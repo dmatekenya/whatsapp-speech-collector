@@ -1,0 +1,99 @@
+# ===================
+# STAGING COMPOSE
+# ===================
+name: whatsapp-speech-collector-staging
+
+x-app: &app
+  image: whatsapp-speech-collector-staging:local
+  pull_policy: never
+  env_file: .env.staging
+  environment:
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: speech_collector_staging
+    REDIS_URL: redis://redis:6379/0
+    APP_ENV: staging
+    WHATSAPP_PROVIDER: meta
+    WHATSAPP_SENDS_DISABLED: ${WHATSAPP_SENDS_DISABLED:?Set WHATSAPP_SENDS_DISABLED=true in .env.staging}
+    STAGING_META_AUDIO_FIXTURE: /staging-audio/webhook-fixture.ogg
+    META_ACCESS_TOKEN: ""
+    TWILIO_ACCOUNT_SID: ""
+    TWILIO_AUTH_TOKEN: ""
+    TWILIO_WHATSAPP_NUMBER: ""
+    TWILIO_DELETE_MEDIA: "false"
+    AUDIO_ROOT: /staging-audio
+  volumes:
+    - staging_audio:/staging-audio
+
+services:
+  migrate:
+    <<: *app
+    build:
+      context: .
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_VERSION: ${APP_VERSION:-0.6.0}
+        APP_GIT_COMMIT: ${APP_GIT_COMMIT:-unknown}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *app
+    command:
+      - sh
+      - -ec
+      - |
+        python -c "from src.config import get_settings; get_settings()"
+        exec rq worker inbound outbound --with-scheduler --url redis://redis:6379/0
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17
+    env_file: .env.staging
+    environment:
+      POSTGRES_DB: speech_collector_staging
+    volumes:
+      - staging_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d speech_collector_staging"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    volumes:
+      - staging_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  default:
+    internal: true
+
+volumes:
+  staging_audio:
+  staging_postgres:
+  staging_redis:

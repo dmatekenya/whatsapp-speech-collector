@@ -1,0 +1,28 @@
+studies:
+  qc_calibration:
+    enabled: false
+    resume_reminder_minutes: 10
+    prompts:
+      sentence: S12577
+      conversation_starter: C0482
+    durations:
+      sentence: {min_seconds: 5, max_seconds: 45}
+      conversation_starter: {min_seconds: 15, max_seconds: 60, aim_max_seconds: 45, guidance: speech}
+      free_speech: {min_seconds: 15, max_seconds: 60, aim_max_seconds: 45, guidance: speech}
+      silence: {min_seconds: 10, max_seconds: 15, guidance: silence}
+    conditions:
+      C1: {title: Good, reminder: "quiet room, speak clearly", tasks: [sentence, conversation_starter, free_speech]}
+      C2: {title: Too quiet, reminder: "speak very quietly", tasks: [sentence, conversation_starter, free_speech]}
+      C3:
+        title: "Arm's length"
+        reminder: "phone 60–70 cm away"
+        tasks: [sentence, conversation_starter, free_speech]
+        # Keep the slot identities already used by stored C3 clips.
+        storage_order: [conversation_starter, free_speech, sentence]
+      C4: {title: Background voices, reminder: "voices in the background", tasks: [sentence, conversation_starter, free_speech]}
+      C5: {title: Background music, reminder: "music in the background", tasks: [sentence, conversation_starter, free_speech]}
+      C6: {title: Noisy surroundings, reminder: "noise nearby", tasks: [sentence, conversation_starter, free_speech]}
+      C7: {title: Echo, reminder: "use an echoey room", tasks: [sentence, conversation_starter, free_speech]}
+      C8: {title: Muffled microphone, reminder: "partly cover the mic", tasks: [sentence, conversation_starter, free_speech]}
+      C9: {title: Silence in a quiet room, reminder: "stay silent in a quiet room", tasks: [silence, silence, silence]}
+      C10: {title: Silence with speech, reminder: "stay silent with voices nearby", tasks: [silence, silence, silence]}

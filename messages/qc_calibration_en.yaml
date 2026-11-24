@@ -1,0 +1,35 @@
+menu: Choose a recording condition. You can follow the suggested order or pick any unfinished condition.
+menu_button: Conditions
+ready: Ready
+continue: Continue
+task_header: "*{code} · {name}* ({reminder}) — Task {slot} of {total}"
+saved_after_break: Clip saved.
+change: Change condition
+next: Next
+retake: Re-record
+recorded: Clip saved. Continue or record another attempt at this clip.
+done: Thank you! You have completed the audio calibration study.
+progress: "{done} of {total} conditions done."
+condition_done: "{code} done ✅. {progress}"
+duration_feedback: "That was {seconds} {unit}; please aim for {minimum}–{maximum} seconds."
+instructions:
+  sentence: "Read this sentence aloud:"
+  conversation_starter: "Answer this question:"
+  free_speech: "Talk about anything you like:"
+  silence: "Stay silent:"
+duration_guidance:
+  speech: "Aim for {minimum}–{maximum} seconds, no more than {cap}"
+  silence: "Stay silent for {minimum}–{maximum} seconds"
+duration_cap_minute: 1 minute
+duration_cap_seconds: "{seconds} seconds"
+conditions:
+  C1: In a quiet room, hold your phone as you normally would and speak clearly.
+  C2: Hold your phone normally and speak very quietly.
+  C3: Hold the phone at arm's length (about 60–70 cm) and speak normally.
+  C4: Speak while people are talking in the background.
+  C5: Speak while music is playing in the background.
+  C6: Speak with other background noise nearby.
+  C7: Speak in a room where your voice echoes.
+  C8: Keep the microphone partly covered while you speak.
+  C9: In a quiet room, record without speaking.
+  C10: Record without speaking while people talk in the background.

@@ -21,6 +21,9 @@
 - Don't commit or push; I review first.
 
 
+## Documentation
+- Do not move, rename or delete files under docs/ without asking. New docs go in the existing topic folders; add them to docs/_toc.yml.
+
 ## Section headers
 - Section headers in code and config files (Python, YAML, shell) use a banner comment:
   a rule line of `=`, the title in CAPITALS on its own line, then a matching rule line.

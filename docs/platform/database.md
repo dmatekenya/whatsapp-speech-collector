@@ -17,6 +17,9 @@ relative to a configurable root. Schema changes are made only through Alembic mi
 | `inbound_messages` | Every message received from WhatsApp, raw | `message_sid` | **Yes** (phone numbers in `sender`, `raw_payload`) |
 | `recordings` | One row per stored voice note | `id` (file names `R000123`) | No (participant ID only) |
 | `participants` | The registry of approved contributors | `participant_id` (`P0001`) | **Yes** (name, phone number) |
+| `enrollments` | One participant, study and round | `id` | No (participant ID only) |
+| `enrollment_activations` | Every interval during which an enrollment was active | `id` | No |
+| `main_recordings` | View of main and legacy unattributed recordings | `id` | No (participant ID only) |
 | `prompts` | Sentences, conversation starters and images | `prompt_id` (`S00001`, `C0001`, `I0001`) | No |
 | `sessions` | One sitting of recording by one participant | `id` | No |
 | `assignments` | Every prompt sent to a participant | `id` | No |
@@ -28,6 +31,47 @@ relative to a configurable root. Schema changes are made only through Alembic mi
 | `qc_human_reviews` | Tier-3 supervisor decisions (accept / reject), append-only | `id`, `operation_key` | No (supervisor ID and display name; recording IDs) |
 | `alembic_version` | Which migrations have been applied (managed by Alembic) | | No |
 
+### QC calibration
+
+`calibration_state` stores the study conversation by `enrollment_id`. Its
+JSON context records the selected condition, completed conditions, current task
+slot and attempt, and the inbound message reserved for an in-progress upload.
+The reproducible suggested order lives in `enrollments.attributes.condition_order`.
+
+`calibration_clips` links each study attempt to one `recordings` row and the
+study enrollment. It records the condition, task type and position, optional
+fixed prompt ID, attempt number, menu suggestion, actual condition position and
+fast-QC measurements. A re-record adds an attempt and keeps the earlier one.
+The requested condition is protocol metadata. Eligibility for main progress
+and coverage still comes from `main_recordings`, and calibration clips create
+no assignment rows. `outbound_messages.interactive` stores an optional Meta
+list or button payload delivered by the existing outbox.
+
+Run `python -m scripts.export_calibration_clips NEW_DIRECTORY` for the
+restricted metadata CSV. Add `--blind` to export opaque WAV filenames and a
+shuffled rater CSV. Keep the adjacent `.key.csv` outside the material sent to
+raters. Neither export includes names or phone numbers.
+
+
+### Calibration review
+
+`calibration_review_clips` projects calibration attempts and the latest study
+check. It includes pseudonymous IDs, `is_test`, condition and task labels,
+duration and level measurements, and the relative WAV path. Participant
+names and phone numbers are excluded. Both `sc_readonly` and
+`masakhane_supervision_ro` can select from the view.
+
+`calibration_clip_checks` is an append-only log keyed by `id`.
+`recording_id` references the unique recording ID in `calibration_clips`.
+Each row stores `as_intended` (`yes`, `no`, or `unclear`), optional `note`,
+`reviewer`, a unique UUID `operation_key`, and `created_at`. The latest
+timestamp and then highest ID determine the current check. The writer
+`masakhane_qc_writer` has `INSERT` and `SELECT` on this table. Study
+checks are independent of `qc_human_reviews` and `qc_final`.
+
+See the [SC calibration study contract](supervision-study-contract.md) for the
+view columns and insert format.
+
 ## How they connect
 
 ```{mermaid}
@@ -35,6 +79,10 @@ erDiagram
   PARTICIPANTS ||--o{ INBOUND_MESSAGES : sends
   INBOUND_MESSAGES ||--o| RECORDINGS : "voice note becomes"
   PARTICIPANTS ||--o{ RECORDINGS : owns
+  PARTICIPANTS ||--o{ ENROLLMENTS : joins
+  ENROLLMENTS ||--o{ ENROLLMENT_ACTIVATIONS : has
+  ENROLLMENTS |o--o{ RECORDINGS : attributes
+  ENROLLMENTS |o--o{ SESSIONS : attributes
   PARTICIPANTS ||--o{ SESSIONS : has
   SESSIONS ||--o{ ASSIGNMENTS : contains
   PROMPTS ||--o{ ASSIGNMENTS : "is sent as"
@@ -55,7 +103,50 @@ A voice note's journey: `inbound_messages` (raw) → `recordings` (stored audio)
 `assignments` row (which prompt it answered) → which points to `prompts` (what was asked) and
 `participants` (who answered). In a `free_speech` session the assignment is an invitation to talk,
 with no prompt. A recording without an assignment is an *unassigned recording*: a voice note sent
-outside a session, kept but never counted toward any target.
+outside a session, kept outside task targets. Eligible unassigned minutes count toward the lifetime cap.
+
+## Studies and enrollment
+
+An enrollment identifies a participant, a study (`main` or `qc_calibration`)
+and a round. A participant may have several enrollments and at most one active
+enrollment. The database enforces unique participant, study and round
+combinations and enforces the active limit with a partial unique index.
+
+| Enrollment column | Details |
+|---|---|
+| `id`, `participant_id` | Bigint primary key and foreign key to the participant registry identifier |
+| `study`, `round` | Study code and round name |
+| `target_minutes` | Optional integer ceiling for the round |
+| `status` | `active`, `paused`, `completed` or `withdrawn` |
+| `attributes` | Study-specific JSONB settings, empty by default |
+| `starts_on`, `ends_on` | Optional dates |
+| `created_at`, `updated_at` | Timestamps with time zone |
+
+The enrollment status trigger opens or closes an interval in
+`enrollment_activations`. The worker resolves the interval containing the
+inbound receipt timestamp before downloading audio. It pins the resulting
+enrollment on the recording row so delayed or retried jobs retain their study.
+A new main session stores the active enrollment. Both foreign keys are nullable
+for backward compatibility.
+
+The migration puts existing participants in the main pilot enrollment, maps
+legacy `inactive` status to `paused`, attributes existing sessions and
+recordings, and gives these pilot participants an 80-minute lifetime cap.
+Recordings with no participant keep a null enrollment. `participants.is_test`
+continues to identify staff and developer accounts.
+
+`main_recordings` contains the main study and legacy rows with null enrollment
+IDs. Use it for production QC inputs, progress, coverage and dataset exports.
+The lifetime cap uses the study flags in `config/participants.yaml`. It counts
+stored accepted and provisional QC minutes, including unassigned clips, across
+all eligible rounds. Rejected and duplicate clips are excluded. Imports set
+`participants.lifetime_cap_minutes` from the first cohort. A round's ceiling
+and the lifetime cap apply alongside the existing per-task targets.
+
+An experiment clip can only have an experiment duplicate. A newly received
+main clip matching an existing experiment clip is flagged with
+`duplicate_of_experiment_clip`. Its distinct QC reason preserves the
+main-study duplicate link semantics.
 
 ## Tables
 

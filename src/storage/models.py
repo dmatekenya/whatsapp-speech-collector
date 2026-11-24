@@ -18,7 +18,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    column,
     func,
+    table,
 )
 from sqlalchemy import text as sql_text  # Prompt has a column named "text"
 from sqlalchemy.dialects.postgresql import JSONB
@@ -85,6 +87,7 @@ class Participant(Base):
     is_test: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=sql_text("false")
     )
+    lifetime_cap_minutes: Mapped[int | None]
     batch: Mapped[str] = mapped_column(Text, nullable=False)
     enrolled_on: Mapped[date] = mapped_column(Date, nullable=False)
     attributes: Mapped[dict[str, Any]] = mapped_column(
@@ -97,6 +100,71 @@ class Participant(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class Enrollment(Base):
+    __tablename__ = "enrollments"
+    __table_args__ = (
+        UniqueConstraint("participant_id", "study", "round", name="uq_enrollments_study_round"),
+        Index("uq_enrollments_active", "participant_id", unique=True,
+              postgresql_where=sql_text("status = 'active'")),
+        CheckConstraint(_in_check("study", ("main", "qc_calibration")), name="ck_enrollments_study"),
+        CheckConstraint(_in_check("status", ("active", "paused", "completed", "withdrawn")),
+                        name="ck_enrollments_status"),
+        CheckConstraint("target_minutes >= 0", name="ck_enrollments_target_minutes"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    participant_id: Mapped[str] = mapped_column(Text, ForeignKey("participants.participant_id"))
+    study: Mapped[str] = mapped_column(Text)
+    round: Mapped[str] = mapped_column(Text)
+    target_minutes: Mapped[int | None]
+    status: Mapped[str] = mapped_column(Text)
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=sql_text("'{}'::jsonb"))
+    starts_on: Mapped[date | None]
+    ends_on: Mapped[date | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                                                onupdate=func.now())
+
+
+class EnrollmentActivation(Base):
+    __tablename__ = "enrollment_activations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    enrollment_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("enrollments.id"), index=True)
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CalibrationState(Base):
+    __tablename__ = "calibration_state"
+
+    enrollment_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("enrollments.id"), primary_key=True)
+    context: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=sql_text("'{}'::jsonb"))
+
+
+class CalibrationClip(Base):
+    __tablename__ = "calibration_clips"
+    __table_args__ = (
+        UniqueConstraint("enrollment_id", "condition_code", "task_position", "attempt",
+                         name="uq_calibration_clips_attempt"),
+        CheckConstraint("task_position >= 1 AND attempt >= 1 AND order_position BETWEEN 1 AND 10",
+                        name="ck_calibration_clips_positions"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    recording_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("recordings.id"), unique=True)
+    enrollment_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("enrollments.id"))
+    condition_code: Mapped[str] = mapped_column(Text)
+    task_type: Mapped[str] = mapped_column(Text)
+    task_position: Mapped[int]
+    prompt_id: Mapped[str | None] = mapped_column(Text, ForeignKey("prompts.prompt_id"))
+    attempt: Mapped[int]
+    suggested_condition: Mapped[str] = mapped_column(Text)
+    order_position: Mapped[int]
+    fast_qc: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Prompt(Base):
@@ -218,13 +286,16 @@ class Recording(Base):
     inbound_message_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("inbound_messages.id"), unique=True, nullable=False
     )
+    enrollment_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("enrollments.id", name="fk_recordings_enrollment_id"), index=True
+    )
     participant_id: Mapped[str | None] = mapped_column(
         Text,
         ForeignKey("participants.participant_id", name="fk_recordings_participant_id"),
         index=True,
     )
     # The assignment this answers (a prompt, or a free_speech invitation). None:
-    # an unassigned recording, sent outside a session; kept, never counted.
+    # an unassigned recording; excluded from task progress, eligible for the lifetime cap.
     assignment_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("assignments.id", name="fk_recordings_assignment_id", use_alter=True),
@@ -298,6 +369,12 @@ class Recording(Base):
 # =========
 # TASK BANK
 # =========
+# Read-only view for production consumers. Keep it outside ORM migration metadata.
+main_recordings = table(
+    "main_recordings", *(column(field.name, field.type) for field in Recording.__table__.columns)
+)
+
+
 class TaskSession(Base):
     """A run of prompts of one task type sent to one participant (table "sessions")."""
 
@@ -314,6 +391,9 @@ class TaskSession(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    enrollment_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("enrollments.id", name="fk_sessions_enrollment_id"), index=True
+    )
     participant_id: Mapped[str] = mapped_column(
         Text, ForeignKey("participants.participant_id"), nullable=False, index=True
     )
@@ -443,6 +523,7 @@ class OutboundMessage(Base):
     # {"before": {"state", "context"}, "after": {...}}. If the reply isn't
     # delivered, the state goes back to "before" (unless a later turn moved on).
     state_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    interactive: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

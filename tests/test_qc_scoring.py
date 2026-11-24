@@ -367,12 +367,18 @@ def test_the_migration_downgrade_removes_exactly_what_it_added(clean_db: None) -
             triggers = conn.execute(text("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"))
             return {row[0] for row in functions} | {row[0] for row in triggers}
 
-    after = schema()
-    command.downgrade(Config("alembic.ini"), "f3a7c2d9e816")  # tier 2 (two migrations) and tier 3
+    # Compare the two endpoints of the QC migrations independently of newer schema.
+    alembic = Config("alembic.ini")
+    current = schema()
+    command.downgrade(alembic, "e2a6c4f8b913")
     try:
+        after = schema()
+        command.downgrade(alembic, "f3a7c2d9e816")  # tier 2 (two migrations) and tier 3
         before = schema()
+        command.upgrade(alembic, "e2a6c4f8b913")
+        assert schema() == after
     finally:
-        command.upgrade(Config("alembic.ini"), "head")
+        command.upgrade(alembic, "head")
     assert after["tables"] - before["tables"] == {"qc_results", "qc_human_reviews"}
     assert after["recordings"] - before["recordings"] == {"snr_db", "qc_tier2", "qc_tier3", "qc_tier3_reason", "qc_final"}
     assert after["checks"] - before["checks"] == {"ck_recordings_qc_tier2", "ck_recordings_qc_tier3", "ck_recordings_qc_final"}
@@ -381,7 +387,7 @@ def test_the_migration_downgrade_removes_exactly_what_it_added(clean_db: None) -
         "qc_final_label", "recordings_set_qc_final", "qc_human_reviews_apply", "qc_human_reviews_append_only",
         "trg_recordings_qc_final", "trg_qc_human_reviews_apply", "trg_qc_human_reviews_append_only",
     }  # fmt: skip
-    assert schema() == after
+    assert schema() == current
 
 
 # ===============

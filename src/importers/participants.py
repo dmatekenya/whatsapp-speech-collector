@@ -7,6 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from src.config import PROJECT_ROOT
+from src.conversation.locks import lock_conversation
 from src.importers.framework import (
     BatchImporter,
     FieldSpec,
@@ -17,8 +18,9 @@ from src.importers.framework import (
     next_id,
     peek_next_id,
 )
+from src.registry.enrollments import MAIN, activate, enrollment_status, initialize_study
 from src.registry.participants import normalize_phone
-from src.storage.models import Participant
+from src.storage.models import Enrollment, Participant
 
 DEFAULT_CONFIG = PROJECT_ROOT / "config" / "participants.yaml"
 
@@ -30,10 +32,14 @@ class ParticipantImporter(BatchImporter):
     title = "PARTICIPANTS"
 
     def __init__(
-        self, config: ImportConfig, source_file: str, today: date | None = None, batch: str | None = None
+        self, config: ImportConfig, source_file: str, today: date | None = None, batch: str | None = None,
+        *, study: str | None = None, round_name: str | None = None,
     ) -> None:
         super().__init__(config)
         self.source_file = source_file
+        self.study = study
+        self.round_name = round_name
+        self.caps = config.options.get("lifetime_cap_minutes", {"default": 60, "pilot": 80})
         # Batch for rows without a batch value; the file name without extension if not given.
         self.batch = batch or Path(source_file).stem
         # Participants this import created (filled by apply; empty on a dry run).
@@ -48,9 +54,11 @@ class ParticipantImporter(BatchImporter):
 
     @classmethod
     def from_file(
-        cls, csv_path: Path, config_path: Path = DEFAULT_CONFIG, batch: str | None = None
+        cls, csv_path: Path, config_path: Path = DEFAULT_CONFIG, batch: str | None = None,
+        *, study: str | None = None, round_name: str | None = None,
     ) -> "ParticipantImporter":
-        return cls(load_config(config_path), source_file=csv_path.name, batch=batch)
+        return cls(load_config(config_path), source_file=csv_path.name, batch=batch,
+                   study=study, round_name=round_name)
 
     # ==========
     # VALIDATION
@@ -128,8 +136,11 @@ class ParticipantImporter(BatchImporter):
 
         ids: dict[int, str] = {}
         for row, participant in matched:
-            changed = self._update(participant, row)
-            report.counts["updated" if changed else "unchanged"] += 1
+            if self.study is None:
+                changed = self._update(participant, row)
+                report.counts["updated" if changed else "unchanged"] += 1
+            elif not self._reenroll(session, row, participant, report, dry_run):
+                continue
             ids[row.number] = participant.participant_id
 
         report.counts["new"] += len(new_rows)
@@ -142,18 +153,50 @@ class ParticipantImporter(BatchImporter):
         for row in new_rows:
             participant_id = next_id(session, self.id_options["sequence"], *self._format())
             values = {field: row.values.get(field, self._defaults(field)) for field in UPDATABLE_FIELDS}
-            session.add(
-                Participant(
-                    participant_id=participant_id,
-                    attributes=row.attributes_with_extra(),
-                    source_file=self.source_file,
-                    **values,
-                )
+            session.add(Participant(
+                participant_id=participant_id,
+                attributes=row.attributes_with_extra(),
+                source_file=self.source_file,
+                lifetime_cap_minutes=self.caps.get(values["batch"], self.caps["default"]),
+                **values,
+            ))
+            session.flush()
+            enrollment = Enrollment(
+                participant_id=participant_id, study=self.study or MAIN,
+                round=self.round_name or values["batch"], status=enrollment_status(values["status"]),
+                starts_on=values["enrolled_on"],
             )
+            initialize_study(enrollment)
+            session.add(enrollment)
             ids[row.number] = participant_id
             self.new_ids.append(participant_id)
         session.flush()
         return ids
+
+    def _reenroll(self, session: Session, row: ParsedRow, participant: Participant,
+                  report: ImportReport, dry_run: bool) -> bool:
+        if not dry_run:
+            lock_conversation(session, participant.phone_number)
+        round_name = self.round_name or row.values.get("batch", self.batch)
+        existing = session.scalar(select(Enrollment).where(
+            Enrollment.participant_id == participant.participant_id,
+            Enrollment.study == self.study, Enrollment.round == round_name,
+        ))
+        if existing is not None:
+            report.error(row.number, self.id_column, f"already enrolled in {self.study}/{round_name}")
+            return False
+        if not dry_run:
+            status = enrollment_status(row.values.get("status", participant.status))
+            enrollment = Enrollment(participant_id=participant.participant_id, study=self.study,
+                                    round=round_name, status=status,
+                                    starts_on=row.values.get("enrolled_on", self.today))
+            if status == "active":
+                activate(session, participant, enrollment)
+            else:
+                initialize_study(enrollment)
+                session.add(enrollment)
+        report.counts["re-enrolled"] += 1
+        return True
 
     def _format(self) -> tuple[str, int]:
         return self.id_options["prefix"], int(self.id_options["width"])

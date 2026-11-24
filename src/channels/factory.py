@@ -21,6 +21,7 @@ def get_channel(name: str | None = None) -> ChannelAdapter:
             account_sid=settings.twilio_account_sid,
             auth_token=settings.twilio_auth_token,
             whatsapp_number=settings.twilio_whatsapp_number,
+            sends_disabled=settings.whatsapp_sends_disabled,
         )
     if name == META:
         token = settings.meta_access_token
@@ -28,5 +29,7 @@ def get_channel(name: str | None = None) -> ChannelAdapter:
             access_token=token.get_secret_value() if token else None,
             phone_number_id=settings.meta_phone_number_id,
             graph_version=settings.meta_graph_version,
+            sends_disabled=settings.whatsapp_sends_disabled,
+            audio_fixture=settings.staging_meta_audio_fixture if settings.app_env == "staging" else None,
         )
     raise ValueError(f"Unknown channel {name!r}")

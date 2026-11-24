@@ -1,7 +1,7 @@
 # Supervision Dashboard and QC: What to Change
 
 For: Stewart (SC). From: Dunstan. Date: 2026-11-10.
-Suggested repo path: `docs/plans/supervision-qc-contract.md`.
+Suggested repo path: `docs/platform/plans/supervision-qc-contract.md`.
 
 Thank you for the work on the dashboard and gateway. There's a lot of careful thinking in it:
 token-protected gateway, audio mounted read-only, supervisors limited to their own contributors,

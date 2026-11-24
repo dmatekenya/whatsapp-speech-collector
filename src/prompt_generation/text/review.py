@@ -14,7 +14,7 @@ from src.prompt_generation.text.sentences import _write_csv
 GAP_COLUMNS = ["domain", "target", "live_active", "new_available", "gap"]
 TOPIC_COLUMNS = ["domain", "topic", "live_active", "new_available"]
 MANIFEST_COLUMNS = [
-    "candidate_id", "text", "source_category", "source_ref", "origin", "read_only",
+    "candidate_id", "text", "source_category", "source_ref", "origin",
     "overlap", "word_count", "est_read_s",
 ]
 
@@ -106,6 +106,40 @@ def allocate(domains: list[dict], size: int) -> dict[str, int]:
     return allocation
 
 
+def _largest_remainder(weights: dict[str, int], size: int) -> dict[str, int]:
+    total = sum(weights.values())
+    if not total:
+        weights = dict.fromkeys(weights, 1)
+        total = len(weights)
+    quotas = {domain: divmod(size * weight, total) for domain, weight in weights.items()}
+    places = {domain: whole for domain, (whole, _) in quotas.items()}
+    priority = sorted(quotas, key=lambda domain: (-quotas[domain][1], domain))
+    for domain in priority[:size - sum(places.values())]:
+        places[domain] += 1
+    return places
+
+
+def allocate_target_share(targets: dict[str, int], available: dict[str, int],
+                          size: int) -> tuple[dict[str, int], dict[str, int]]:
+    """Return the original quotas and the allocation after applying capacity caps."""
+    target_places = _largest_remainder(targets, size)
+    final_places = {domain: min(places, available[domain]) for domain, places in target_places.items()}
+    budget = min(size, sum(available.values()))
+    while (remaining := budget - sum(final_places.values())) > 0:
+        weights = {domain: targets[domain] for domain in targets if final_places[domain] < available[domain]}
+        for domain, places in _largest_remainder(weights, remaining).items():
+            final_places[domain] = min(final_places[domain] + places, available[domain])
+    return target_places, final_places
+
+
+def _unrecorded(row: dict) -> bool:
+    count = row.get("times_recorded")
+    if count not in (None, ""):
+        return int(count) == 0
+    # Older pools only store the boolean derived from the production count.
+    return row.get("in_use", "").lower() != "true"
+
+
 def _pick_topics(topics: dict[str, list[dict]], size: int, rng: random.Random) -> list[dict]:
     topic_order = sorted(topics)
     rng.shuffle(topic_order)
@@ -124,7 +158,7 @@ def _pick_topics(topics: dict[str, list[dict]], size: int, rng: random.Random) -
 
 
 def write_sentence_batch(pool: Path, out: Path, settings: LabelSettings, *, size: int,
-                         live_sample: int = 0, seed: int = 42) -> None:
+                         allocation: str = "target-share", seed: int = 42) -> None:
     if pool.resolve() == out.resolve():
         raise ValueError("The review directory must differ from the pool directory")
     with output_lock(out):
@@ -133,41 +167,53 @@ def write_sentence_batch(pool: Path, out: Path, settings: LabelSettings, *, size
         with output_lock(pool):
             rows = sorted(read_kept(pool / "pool.csv"), key=lambda row: row["pool_id"])
             labels = valid_labels(pool / "labels-model.csv", settings)
-        domains, _ = gap_counts(rows, labels, settings)
-        allocation = allocate(domains, size)
         groups = defaultdict(lambda: defaultdict(list))
-        live = []
+        counts = Counter()
         for row in rows:
             label = labels.get(row["pool_id"])
-            if row["origin"] == "new" and row["status"] == "available" and label:
+            if label and row["status"] != "retired" and _unrecorded(row):
                 groups[label["domain"]][label["topic"]].append(row)
-            elif row["origin"] == "live" and row["status"] == "active":
-                live.append(row)
+                counts[label["domain"], row["origin"]] += 1
+
+        available = {domain: counts[domain, "live"] + counts[domain, "new"] for domain in settings.targets}
+        if allocation == "gap":
+            domains, _ = gap_counts(rows, labels, settings)
+            weights = {row["domain"]: row["gap"] for row in domains}
+            target_places = allocate([{**row, "new_available": size} for row in domains], size)
+            final_places = allocate([{**row, "new_available": available[row["domain"]]} for row in domains], size)
+        else:
+            weights = settings.targets
+            target_places, final_places = allocate_target_share(weights, available, size)
 
         rng = random.Random(seed)
         picked = []
-        for domain, count in allocation.items():
+        for domain, count in final_places.items():
             picked.extend(_pick_topics(groups[domain], count, rng))
-        picked.extend(rng.sample(live, min(live_sample, len(live))))
         overlap = {row["pool_id"] for row in rng.sample(picked, (len(picked) + 5) // 10)}
         rng.shuffle(picked)
         manifest = [
             {
-                **row, "candidate_id": row["pool_id"],
-                "read_only": "yes" if row["origin"] == "live" else "no",
+                **row,
+                "candidate_id": (row.get("prompt_id") or row["pool_id"])
+                if row["origin"] == "live" else row["pool_id"],
                 "overlap": "yes" if row["pool_id"] in overlap else "no",
             }
             for row in picked
         ]
         _write_csv(out / "manifest.csv", manifest, MANIFEST_COLUMNS)
-        model_rows = [labels[row["pool_id"]] for row in picked if row["pool_id"] in labels]
+        model_rows = [labels[row["pool_id"]] for row in picked]
         _write_csv(out / "model-labels.csv", model_rows, LABEL_COLUMNS)
         (out / "READY").write_text("ready\n", encoding="utf-8")
 
-    print(f"Batch {out}: {sum(allocation.values())} new + {min(live_sample, len(live))} live sentences, "
-          f"{len(overlap)} overlap")
-    print(f"  {'Domain':<17} {'Target':>7} {'Gap':>7} {'Available':>10} {'Sampled':>8}")
-    for row in domains:
-        domain = row["domain"]
-        print(f"  {domain:<17} {row['target']:>7} {row['gap']:>7} "
-              f"{row['new_available']:>10} {allocation[domain]:>8}")
+    print(f"Batch {out}: {len(picked)} sentences, {len(overlap)} overlap")
+    print("Available candidates by origin")
+    print(f"  {'Domain':<17} {'Live':>7} {'New':>7}")
+    for domain in available:
+        print(f"  {domain:<17} {counts[domain, 'live']:>7} {counts[domain, 'new']:>7}")
+    print(f"Allocation ({allocation})")
+    print(f"  {'Domain':<17} {'Share':>7} {'Target places':>13} {'Available':>10} {'Final places':>12}")
+    total_weight = sum(weights.values())
+    for domain in available:
+        share = weights[domain] / total_weight if total_weight else 0
+        print(f"  {domain:<17} {share:>7.1%} {target_places[domain]:>13} "
+              f"{available[domain]:>10} {final_places[domain]:>12}")

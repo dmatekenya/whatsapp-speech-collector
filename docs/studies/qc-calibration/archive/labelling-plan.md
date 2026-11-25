@@ -1,6 +1,6 @@
 # Audio Quality Labelling Plan
 
-> Superseded by the QC calibration study protocol and methodology (2026-11-18); kept for history.
+> Superseded by the QC calibration study [protocol](../protocol.md) and [methodology](../methodology.md) (2026-11-18); kept for history.
 
 Last updated: 2026-11-11. Part of the audio-quality experiments ([handover.md](handover.md)).
 

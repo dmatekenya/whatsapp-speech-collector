@@ -48,7 +48,7 @@ Candidate records retain unit type, sentence count, document ID and block index 
 provenance and rejection reasons. Model-suggested domains, confidence, model and scoring time
 are saved separately and merged by stable unit ID, so rerunning sentence preparation preserves
 existing scores. These suggestions do not replace human review. See the
-[text pipeline README](../../src/prompt_generation/text/README.md) for settings and output schemas.
+[text pipeline README](https://github.com/dmatekenya/whatsapp-speech-collector/blob/main/src/prompt_generation/text/README.md) for settings and output schemas.
 
 ## Picture content rules
 

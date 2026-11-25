@@ -1,5 +1,9 @@
 # whatsapp-speech-collector
 
+## Branches
+
+Work on the branch named in the task, normally studies-qc-calibration or prompt-generation. Don't create new branches or worktrees unless asked; if a temporary branch is needed, say so and delete it once merged. Docs-only changes go directly to main after the strict docs build passes.
+
 ## Environment
 - A real `.env` already exists in the repo root. Never read, print, create or modify it,
   and don't tell me to copy `.env.example` to `.env`.

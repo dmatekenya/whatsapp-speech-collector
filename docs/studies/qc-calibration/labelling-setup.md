@@ -9,7 +9,7 @@ that is never uploaded to Label Studio.
 |---|---|
 | `docker-compose.labelling.yml` | repo root |
 | `build_labelling_bundle.py` | `scripts/labelling/` |
-| `pass1-label-config.xml`, `pass2-label-config.xml` | `config/labelling/` |
+| `qc_calibration_pass1.xml`, `qc_calibration_pass2.xml` | `config/labelling/` |
 
 Commit these through a branch and PR like other changes, together with the Caddyfile block below.
 
@@ -110,7 +110,7 @@ scp dun@165.227.73.241:'~/WhatsApp-speech-collector/data/labelling/tasks/qc-2026
 
 **Pass 1: audio labels (all clips)**
 1. Create project "QC calibration – pass 1".
-2. Labeling setup → Custom template → Code: paste `pass1-label-config.xml` → Save.
+2. Labeling setup → Custom template → Code: paste `qc_calibration_pass1.xml` → Save.
 3. Settings → Cloud Storage → Add Source Storage → **Local files**:
    - absolute local path: `/label-studio/files/qc-2026-11`
    - leave "Treat every bucket object as a source file" **off**
@@ -121,7 +121,7 @@ scp dun@165.227.73.241:'~/WhatsApp-speech-collector/data/labelling/tasks/qc-2026
    don't see each other's answers.
 
 **Pass 2: transcription (pilot sentence clips)**
-Same steps with `pass2-label-config.xml`, project name "QC calibration – pass 2", same local
+Same steps with `qc_calibration_pass2.xml`, project name "QC calibration – pass 2", same local
 storage path, and `qc-2026-11-pass2.json`.
 
 Play one task in each project before inviting raters, to confirm the audio loads.

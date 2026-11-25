@@ -4,7 +4,7 @@ Runs on the droplet host with plain Python 3 (standard library only), from the r
 
     python3 build_labelling_bundle.py \
         --calibration data/exports/qc-calibration-2026-11-23/clips.csv \
-        --pilot data/exports/pilot-sample.csv \
+        --pilot data/qc/tier2-sample-<thresholds_version>.csv \
         --name qc-2026-11 --exclude P0020,P0023
 
 Writes:
@@ -65,10 +65,12 @@ def collect(args: argparse.Namespace) -> list[dict]:
         for row in read_csv(Path(args.pilot)):
             if row["participant_id"] in excluded:
                 continue
+            # accepts the score_tier2 --sample file (task_type, level) or a custom CSV (task, tier2)
             clips.append({"source": "pilot", "participant_id": row["participant_id"],
-                          "condition": "", "task": row["task"], "wav_path": row["wav_path"],
+                          "condition": "", "task": row.get("task") or row.get("task_type", ""),
+                          "wav_path": row["wav_path"],
                           "recording_id": row.get("recording_id") or recording_id(row["wav_path"]),
-                          "tier2": row.get("tier2", "")})
+                          "tier2": row.get("tier2") or row.get("level", "")})
     return clips
 
 
@@ -125,7 +127,7 @@ def build(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--calibration", required=True, help="clips.csv from export_calibration_clips")
-    parser.add_argument("--pilot", help="pilot sample CSV (participant_id, recording_id, wav_path, task, tier2)")
+    parser.add_argument("--pilot", help="pilot sample: the score_tier2 --sample CSV, or any CSV with participant_id, recording_id, wav_path and task/task_type")
     parser.add_argument("--name", required=True, help="bundle name, e.g. qc-2026-11")
     parser.add_argument("--exclude", default="", help="participant IDs to leave out, comma-separated")
     build(parser.parse_args())

@@ -3,16 +3,19 @@
   <Audio name="audio" value="$audio" hotkey="space"/>
 
   <Header value="1. Who can you hear speaking?"/>
+  <Text name="s_help" value="A main speaker is the clear voice the recording is focused on. Background voices are quieter, further away, or not talking to the phone."/>
   <Choices name="speaker" toName="audio" choice="single-radio" required="true" showInline="false">
-    <Choice value="One person close to the phone"/>
-    <Choice value="More than one person close to the phone"/>
-    <Choice value="Only people in the background"/>
+    <Choice value="One main speaker"/>
+    <Choice value="Two or more main speakers"/>
+    <Choice value="Only speech from a radio, TV or phone (no live speaker)"/>
+    <Choice value="Only music (no one speaking)"/>
+    <Choice value="Only background voices (no main speaker)"/>
     <Choice value="Nobody is speaking"/>
     <Choice value="Not sure"/>
   </Choices>
 
   <View visibleWhen="choice-selected" whenTagName="speaker"
-        whenChoiceValue="One person close to the phone,More than one person close to the phone">
+        whenChoiceValue="One main speaker,Two or more main speakers">
     <Header value="2. Could you write down what was said?"/>
     <Text name="t_help" value="Judge whether the sounds are clear, not whether you know the word."/>
     <Choices name="transcribability" toName="audio" choice="single-radio" showInline="false">
@@ -35,12 +38,12 @@
   <Header value="4. What problems can you hear? Tick all that apply."/>
   <Choices name="issues" toName="audio" choice="multiple" required="true" showInline="false">
     <Choice value="No issues"/>
-    <Choice value="Steady background noise"/>
+    <Choice value="Background noise (not voices or music)"/>
     <Choice value="Wind"/>
     <Choice value="Handling noise"/>
     <Choice value="Background voices (words not understandable)"/>
     <Choice value="Competing speech (another person's words understandable)"/>
-    <Choice value="Music"/>
+    <Choice value="Background music"/>
     <Choice value="Echo"/>
     <Choice value="Far from phone"/>
     <Choice value="Too quiet"/>

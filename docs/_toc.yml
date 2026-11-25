@@ -43,8 +43,11 @@ parts:
   chapters:
   - file: studies/index
     sections:
-    - file: studies/qc-calibration/protocol
     - file: studies/qc-calibration/methodology
+    - file: studies/qc-calibration/protocol
+    - file: studies/qc-calibration/recording-methodology
+    - file: studies/qc-calibration/labelling-methodology
+    - file: studies/qc-calibration/labelling-setup
     - file: studies/qc-calibration/archive/handover
       sections:
       - file: studies/qc-calibration/archive/recording-guide

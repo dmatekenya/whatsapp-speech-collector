@@ -18,5 +18,6 @@ for details.
 
 The QC calibration [recording protocol](qc-calibration/protocol.md) describes
 the ten conditions and recording tasks. The [methodology](qc-calibration/methodology.md)
-describes the collection targets. The [audio-quality archive](qc-calibration/archive/handover.md)
+describes the [collection targets](qc-calibration/recording-methodology.md).
+The [audio-quality archive](qc-calibration/archive/handover.md)
 preserves the earlier handover, recording guide, and labelling plan.
